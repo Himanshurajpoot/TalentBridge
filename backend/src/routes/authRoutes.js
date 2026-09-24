@@ -8,13 +8,25 @@ const {
 
 const authenticate = require("../middleware/authMiddleware");
 const authorize = require("../middleware/authorize");
+const {
+    loginRateLimiter,
+} = require("../middleware/rateLimiter");
 
 const router = express.Router();
 
 router.post("/register", register);
-router.post("/login", login);
 
-router.get("/me", authenticate, getMe);
+router.post(
+    "/login",
+    loginRateLimiter,
+    login
+);
+
+router.get(
+    "/me",
+    authenticate,
+    getMe
+);
 
 router.get(
     "/freelancer-only",

@@ -1,15 +1,27 @@
 const request = require("supertest");
 
 const app = require("../src/app");
-
 const pool = require("../src/config/db");
 
 describe("Skill API", () => {
     let clientToken;
     let freelancerToken;
+    let adminToken;
     let skillId;
 
     beforeAll(async () => {
+        /*
+         * Temporarily promote the existing client test user to admin
+         * so we can test admin-only skill creation.
+         */
+        await pool.query(
+            `
+            UPDATE users
+            SET role = 'admin'
+            WHERE email = 'client.test@example.com'
+            `
+        );
+
         const clientLogin = await request(app)
             .post("/api/auth/login")
             .send({
@@ -19,7 +31,7 @@ describe("Skill API", () => {
 
         expect(clientLogin.statusCode).toBe(200);
 
-        clientToken = clientLogin.body.data.token;
+        adminToken = clientLogin.body.data.token;
 
         const freelancerLogin = await request(app)
             .post("/api/auth/login")
@@ -31,6 +43,58 @@ describe("Skill API", () => {
         expect(freelancerLogin.statusCode).toBe(200);
 
         freelancerToken = freelancerLogin.body.data.token;
+
+        /*
+         * Restore the existing test user to client temporarily
+         * so we can create a normal client JWT.
+         */
+        await pool.query(
+            `
+            UPDATE users
+            SET role = 'client'
+            WHERE email = 'client.test@example.com'
+            `
+        );
+
+        const normalClientLogin = await request(app)
+            .post("/api/auth/login")
+            .send({
+                email: "client.test@example.com",
+                password: "ClientPassword123",
+            });
+
+        expect(normalClientLogin.statusCode).toBe(200);
+
+        clientToken = normalClientLogin.body.data.token;
+
+        /*
+         * Restore the database role to admin.
+         *
+         * adminToken already contains the admin role in its JWT.
+         */
+        await pool.query(
+            `
+            UPDATE users
+            SET role = 'admin'
+            WHERE email = 'client.test@example.com'
+            `
+        );
+    });
+
+    afterAll(async () => {
+        /*
+         * Restore the existing test user to its original client role.
+         *
+         * Do NOT call pool.end() here.
+         * tests/setup.js already closes the PostgreSQL pool.
+         */
+        await pool.query(
+            `
+            UPDATE users
+            SET role = 'client'
+            WHERE email = 'client.test@example.com'
+            `
+        );
     });
 
     beforeEach(async () => {
@@ -66,9 +130,69 @@ describe("Skill API", () => {
         ).toBe(true);
     });
 
+    test("POST /api/skills - should reject request without token", async () => {
+        const response = await request(app)
+            .post("/api/skills")
+            .send({
+                name: "TalentBridge Test Skill Unauthorized",
+            });
+
+        expect(response.statusCode).toBe(401);
+
+        expect(response.body.success).toBe(false);
+
+        expect(response.body.message).toBe(
+            "Authentication required"
+        );
+    });
+
+    test("POST /api/skills - should reject client user", async () => {
+        const response = await request(app)
+            .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            )
+            .send({
+                name: "TalentBridge Test Skill Client",
+            });
+
+        expect(response.statusCode).toBe(403);
+
+        expect(response.body.success).toBe(false);
+
+        expect(response.body.message).toBe(
+            "You do not have permission to perform this action"
+        );
+    });
+
+    test("POST /api/skills - should reject freelancer user", async () => {
+        const response = await request(app)
+            .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            )
+            .send({
+                name: "TalentBridge Test Skill Freelancer",
+            });
+
+        expect(response.statusCode).toBe(403);
+
+        expect(response.body.success).toBe(false);
+
+        expect(response.body.message).toBe(
+            "You do not have permission to perform this action"
+        );
+    });
+
     test("POST /api/skills - should reject missing skill name", async () => {
         const response = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({});
 
         expect(response.statusCode).toBe(400);
@@ -83,6 +207,10 @@ describe("Skill API", () => {
     test("POST /api/skills - should reject empty skill name", async () => {
         const response = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "   ",
             });
@@ -94,9 +222,13 @@ describe("Skill API", () => {
         );
     });
 
-    test("POST /api/skills - should create skill", async () => {
+    test("POST /api/skills - should create skill as admin", async () => {
         const response = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Java",
             });
@@ -125,6 +257,10 @@ describe("Skill API", () => {
     test("POST /api/skills - should trim skill name", async () => {
         const response = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "   TalentBridge Test Skill React   ",
             });
@@ -141,6 +277,10 @@ describe("Skill API", () => {
     test("POST /api/skills - should reject duplicate skill", async () => {
         const firstResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Duplicate",
             });
@@ -151,6 +291,10 @@ describe("Skill API", () => {
 
         const secondResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Duplicate",
             });
@@ -195,6 +339,10 @@ describe("Skill API", () => {
     test("POST /api/skills/profile/me - should reject invalid proficiency", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Invalid Proficiency",
             });
@@ -246,6 +394,10 @@ describe("Skill API", () => {
     test("POST /api/skills/profile/me - should add skill to profile", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Node",
             });
@@ -295,6 +447,10 @@ describe("Skill API", () => {
     test("POST /api/skills/profile/me - should allow skill without proficiency", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill SQL",
             });
@@ -323,6 +479,10 @@ describe("Skill API", () => {
     test("POST /api/skills/profile/me - should reject duplicate profile skill", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Duplicate Profile",
             });
@@ -397,6 +557,10 @@ describe("Skill API", () => {
     test("GET /api/profile/me/skills - should return user's skills", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill MongoDB",
             });
@@ -441,6 +605,10 @@ describe("Skill API", () => {
     test("GET /api/profile/me/skills - should only return logged-in user's skills", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Isolation",
             });
@@ -545,6 +713,10 @@ describe("Skill API", () => {
     test("PATCH /api/profile/me/skills/:skillId - should update proficiency", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Update",
             });
@@ -596,6 +768,10 @@ describe("Skill API", () => {
     test("PATCH /api/profile/me/skills/:skillId - should not update another user's skill", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Ownership",
             });
@@ -651,6 +827,8 @@ describe("Skill API", () => {
 
         expect(response.statusCode).toBe(404);
 
+        expect(response.body.success).toBe(false);
+
         expect(response.body.message).toBe(
             "Skill not found in your profile"
         );
@@ -659,6 +837,10 @@ describe("Skill API", () => {
     test("DELETE /api/profile/me/skills/:skillId - should remove skill", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Remove",
             });
@@ -710,6 +892,10 @@ describe("Skill API", () => {
     test("DELETE /api/profile/me/skills/:skillId - should not remove another user's skill", async () => {
         const skillResponse = await request(app)
             .post("/api/skills")
+            .set(
+                "Authorization",
+                `Bearer ${adminToken}`
+            )
             .send({
                 name: "TalentBridge Test Skill Delete Ownership",
             });

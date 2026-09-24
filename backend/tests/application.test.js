@@ -130,6 +130,73 @@ describe("Applications API", () => {
         });
     });
 
+    test("POST application should reject client user", async () => {
+        const response = await request(app)
+            .post(
+                `/api/jobs/${jobId}/applications`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            )
+            .send({
+                coverLetter:
+                    "I want to apply for this job.",
+            });
+
+        expect(response.statusCode).toBe(403);
+
+        expect(response.body).toEqual({
+            success: false,
+            message:
+                "You do not have permission to perform this action",
+        });
+    });
+
+    test("POST application should reject invalid job ID", async () => {
+        const response = await request(app)
+            .post(
+                "/api/jobs/invalid-job-id/applications"
+            )
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            )
+            .send({
+                coverLetter:
+                    "Test cover letter",
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Invalid job ID",
+        });
+    });
+
+    test("POST application should reject zero job ID", async () => {
+        const response = await request(app)
+            .post(
+                "/api/jobs/0/applications"
+            )
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            )
+            .send({
+                coverLetter:
+                    "Test cover letter",
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Invalid job ID",
+        });
+    });
+
     test("POST application should reject missing cover letter", async () => {
         const response = await request(app)
             .post(
@@ -149,6 +216,101 @@ describe("Applications API", () => {
         expect(response.body).toEqual({
             success: false,
             message: "Cover letter is required",
+        });
+    });
+
+    test("POST application should reject non-string cover letter", async () => {
+        const response = await request(app)
+            .post(
+                `/api/jobs/${jobId}/applications`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            )
+            .send({
+                coverLetter: 12345,
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Cover letter is required",
+        });
+    });
+
+    test("POST application should reject cover letter longer than 5000 characters", async () => {
+        const longCoverLetter =
+            "A".repeat(5001);
+
+        const response = await request(app)
+            .post(
+                `/api/jobs/${jobId}/applications`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            )
+            .send({
+                coverLetter: longCoverLetter,
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message:
+                "Cover letter must not exceed 5000 characters",
+        });
+    });
+
+    test("POST application should reject invalid resume URL", async () => {
+        const response = await request(app)
+            .post(
+                `/api/jobs/${jobId}/applications`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            )
+            .send({
+                coverLetter:
+                    "I am interested in this position.",
+                resumeUrl:
+                    "not-a-valid-url",
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message:
+                "Resume URL must be a valid URL",
+        });
+    });
+
+    test("POST application should reject non-string resume URL", async () => {
+        const response = await request(app)
+            .post(
+                `/api/jobs/${jobId}/applications`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            )
+            .send({
+                coverLetter:
+                    "I am interested in this position.",
+                resumeUrl: 12345,
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message:
+                "Resume URL must be a valid URL",
         });
     });
 
@@ -292,6 +454,24 @@ describe("Applications API", () => {
         });
     });
 
+    test("GET job applications should reject invalid job ID", async () => {
+        const response = await request(app)
+            .get(
+                "/api/jobs/invalid-job-id/applications"
+            )
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            );
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Invalid job ID",
+        });
+    });
+
     test("GET job applications should reject unauthorized freelancer", async () => {
         const response = await request(app)
             .get(
@@ -305,6 +485,48 @@ describe("Applications API", () => {
         expect(response.statusCode).toBe(403);
 
         expect(response.body.success).toBe(false);
+    });
+
+    test("PATCH application status should reject invalid job ID", async () => {
+        const response = await request(app)
+            .patch(
+                `/api/jobs/invalid-job-id/applications/${applicationId}`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            )
+            .send({
+                status: "shortlisted",
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Invalid job ID",
+        });
+    });
+
+    test("PATCH application status should reject invalid application ID", async () => {
+        const response = await request(app)
+            .patch(
+                `/api/jobs/${jobId}/applications/invalid-application-id`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            )
+            .send({
+                status: "shortlisted",
+            });
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Invalid application ID",
+        });
     });
 
     test("PATCH application status should reject invalid status", async () => {

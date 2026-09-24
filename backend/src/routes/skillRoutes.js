@@ -1,5 +1,7 @@
 const express = require("express");
+
 const authenticate = require("../middleware/authMiddleware");
+const authorize = require("../middleware/authorize");
 
 const {
     getSkills,
@@ -9,8 +11,18 @@ const {
 
 const router = express.Router();
 
+// Public: get available skills
 router.get("/", getSkills);
-router.post("/", createSkill);
+
+// Admin only: create a global skill
+router.post(
+    "/",
+    authenticate,
+    authorize("admin"),
+    createSkill
+);
+
+// Authenticated users: add a skill to their own profile
 router.post(
     "/profile/me",
     authenticate,

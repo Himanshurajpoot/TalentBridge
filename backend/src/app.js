@@ -46,7 +46,7 @@ app.options(
 
 app.use(helmet());
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (req, res) => {
     res.status(200).json({

@@ -4,16 +4,51 @@ const authenticate = (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
 
-        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        if (
+            !authHeader ||
+            !authHeader.startsWith("Bearer ")
+        ) {
             return res.status(401).json({
                 success: false,
                 message: "Authentication required",
             });
         }
 
-        const token = authHeader.split(" ")[1];
+        const token = authHeader.slice(7).trim();
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required",
+            });
+        }
+
+        if (!process.env.JWT_SECRET) {
+            console.error(
+                "JWT_SECRET is not configured."
+            );
+
+            return res.status(500).json({
+                success: false,
+                message: "Authentication service is not configured",
+            });
+        }
+
+        const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET
+        );
+
+        if (
+            !decoded ||
+            !decoded.userId ||
+            !decoded.role
+        ) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid token payload",
+            });
+        }
 
         req.user = {
             id: decoded.userId,

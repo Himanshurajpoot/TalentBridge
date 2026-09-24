@@ -42,7 +42,7 @@ function JobApplications() {
 
         try {
             const response = await api.patch(
-                `/jobs/${jobId}/applications/${applicationId}/status`,
+                `/jobs/${jobId}/applications/${applicationId}`,
                 {
                     status,
                 }
