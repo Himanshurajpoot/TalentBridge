@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { getSocket } from "../services/socket";
@@ -8,6 +8,7 @@ export default function NotificationBell() {
     const [open, setOpen] = useState(false);
 
     const navigate = useNavigate();
+    const notificationRef = useRef(null);
 
     const unreadCount = notifications.reduce(
         (count, notification) =>
@@ -20,7 +21,8 @@ export default function NotificationBell() {
 
         const fetchNotifications = async () => {
             try {
-                const response = await api.get("/notifications");
+                const response =
+                    await api.get("/notifications");
 
                 if (!mounted) {
                     return;
@@ -54,9 +56,11 @@ export default function NotificationBell() {
             }
 
             setNotifications((current) => {
-                const existingIndex = current.findIndex(
-                    (item) => item.id === notification.id
-                );
+                const existingIndex =
+                    current.findIndex(
+                        (item) =>
+                            item.id === notification.id
+                    );
 
                 if (existingIndex !== -1) {
                     return current.map((item) =>
@@ -66,10 +70,10 @@ export default function NotificationBell() {
                     );
                 }
 
-                return [notification, ...current].slice(
-                    0,
-                    50
-                );
+                return [
+                    notification,
+                    ...current,
+                ].slice(0, 50);
             });
         };
 
@@ -87,6 +91,33 @@ export default function NotificationBell() {
             );
         };
     }, []);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (
+                notificationRef.current &&
+                !notificationRef.current.contains(
+                    event.target
+                )
+            ) {
+                setOpen(false);
+            }
+        };
+
+        if (open) {
+            document.addEventListener(
+                "mousedown",
+                handleClickOutside
+            );
+        }
+
+        return () => {
+            document.removeEventListener(
+                "mousedown",
+                handleClickOutside
+            );
+        };
+    }, [open]);
 
     const markAsRead = async (id) => {
         setNotifications((current) =>
@@ -140,7 +171,8 @@ export default function NotificationBell() {
     };
 
     const markAllAsRead = async () => {
-        const previousNotifications = notifications;
+        const previousNotifications =
+            notifications;
 
         setNotifications((current) =>
             current.map((notification) => ({
@@ -155,7 +187,9 @@ export default function NotificationBell() {
             );
 
             if (!response.data?.success) {
-                setNotifications(previousNotifications);
+                setNotifications(
+                    previousNotifications
+                );
             }
         } catch (error) {
             console.error(
@@ -163,7 +197,9 @@ export default function NotificationBell() {
                 error
             );
 
-            setNotifications(previousNotifications);
+            setNotifications(
+                previousNotifications
+            );
         }
     };
 
@@ -182,7 +218,9 @@ export default function NotificationBell() {
             navigate("/messages", {
                 state: {
                     conversationId:
-                        Number(notification.reference_id),
+                        Number(
+                            notification.reference_id
+                        ),
                 },
             });
 
@@ -191,7 +229,8 @@ export default function NotificationBell() {
         }
 
         if (
-            notification.reference_type === "project" &&
+            notification.reference_type ===
+                "project" &&
             notification.reference_id
         ) {
             if (
@@ -240,7 +279,10 @@ export default function NotificationBell() {
     };
 
     return (
-        <div className="relative">
+        <div
+            ref={notificationRef}
+            className="relative"
+        >
             <button
                 type="button"
                 onClick={() =>

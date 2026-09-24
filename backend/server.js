@@ -6,7 +6,22 @@ const jwt = require("jsonwebtoken");
 
 const app = require("./src/app");
 const pool = require("./src/config/db");
+
 const onlineUsers = new Map();
+
+/*
+ * Tracks which conversation each user is actively viewing.
+ *
+ * Structure:
+ *
+ * userId -> Set of conversation IDs
+ *
+ * Example:
+ *
+ * 3 -> Set { 146 }
+ * 4 -> Set { 146, 150 }
+ */
+const activeConversations = new Map();
 
 const PORT = process.env.PORT || 5001;
 
@@ -22,6 +37,9 @@ const notificationService = require("./src/services/notificationService");
 
 notificationService.setSocketIO(io);
 
+/*
+ * Socket.IO authentication
+ */
 io.use((socket, next) => {
     try {
         const token = socket.handshake.auth.token;
@@ -44,10 +62,15 @@ io.use((socket, next) => {
 
         next();
     } catch (error) {
-        next(new Error("Invalid or expired token"));
+        next(
+            new Error("Invalid or expired token")
+        );
     }
 });
 
+/*
+ * Socket connection
+ */
 io.on("connection", (socket) => {
     console.log(
         `Socket connected: ${socket.id} | User: ${socket.user.id} | Role: ${socket.user.role}`
@@ -55,6 +78,9 @@ io.on("connection", (socket) => {
 
     const userId = socket.user.id;
 
+    /*
+     * Track online users
+     */
     const currentConnections =
         onlineUsers.get(userId) || 0;
 
@@ -75,12 +101,23 @@ io.on("connection", (socket) => {
         });
     }
 
+    /*
+     * Every socket joins its personal room.
+     *
+     * Example:
+     * user 3 -> user:3
+     */
     socket.join(`user:${socket.user.id}`);
 
     console.log(
         `User ${socket.user.id} joined room user:${socket.user.id}`
     );
 
+    /*
+     * =========================================================
+     * GET MY CONVERSATIONS
+     * =========================================================
+     */
     socket.on(
         "getMyConversations",
         async (callback) => {
@@ -91,6 +128,7 @@ io.on("connection", (socket) => {
                         c.id,
                         c.created_at,
                         c.updated_at,
+
                         COALESCE(
                             (
                                 SELECT json_build_object(
@@ -106,6 +144,7 @@ io.on("connection", (socket) => {
                             ),
                             'null'::json
                         ) AS last_message,
+
                         COALESCE(
                             (
                                 SELECT json_agg(
@@ -125,10 +164,14 @@ io.on("connection", (socket) => {
                             ),
                             '[]'::json
                         ) AS participants
+
                     FROM conversations c
+
                     JOIN conversation_members current_member
                         ON current_member.conversation_id = c.id
+
                     WHERE current_member.user_id = $1
+
                     ORDER BY c.updated_at DESC
                     `,
                     [socket.user.id]
@@ -136,7 +179,8 @@ io.on("connection", (socket) => {
 
                 callback?.({
                     success: true,
-                    conversations: result.rows,
+                    conversations:
+                        result.rows,
                 });
             } catch (error) {
                 console.error(
@@ -153,6 +197,11 @@ io.on("connection", (socket) => {
         }
     );
 
+    /*
+     * =========================================================
+     * JOIN CONVERSATION
+     * =========================================================
+     */
     socket.on(
         "joinConversation",
         async (conversationId, callback) => {
@@ -165,18 +214,19 @@ io.on("connection", (socket) => {
                     });
                 }
 
-                const result = await pool.query(
-                    `
-                    SELECT 1
-                    FROM conversation_members
-                    WHERE conversation_id = $1
-                      AND user_id = $2
-                    `,
-                    [
-                        conversationId,
-                        socket.user.id,
-                    ]
-                );
+                const result =
+                    await pool.query(
+                        `
+                        SELECT 1
+                        FROM conversation_members
+                        WHERE conversation_id = $1
+                          AND user_id = $2
+                        `,
+                        [
+                            conversationId,
+                            socket.user.id,
+                        ]
+                    );
 
                 if (result.rowCount === 0) {
                     console.log(
@@ -217,6 +267,172 @@ io.on("connection", (socket) => {
         }
     );
 
+    /*
+     * =========================================================
+     * CONVERSATION OPENED
+     * =========================================================
+     *
+     * The frontend sends this when the user is actually
+     * viewing a conversation.
+     *
+     * This is different from joinConversation.
+     *
+     * joinConversation = socket room
+     *
+     * conversationOpened = user is actively looking at it
+     */
+    socket.on(
+        "conversationOpened",
+        async (conversationId, callback) => {
+            try {
+                if (!conversationId) {
+                    return callback?.({
+                        success: false,
+                        message:
+                            "Conversation ID is required",
+                    });
+                }
+
+                /*
+                 * Verify membership before tracking the
+                 * conversation as active.
+                 */
+                const memberResult =
+                    await pool.query(
+                        `
+                        SELECT 1
+                        FROM conversation_members
+                        WHERE conversation_id = $1
+                          AND user_id = $2
+                        `,
+                        [
+                            conversationId,
+                            socket.user.id,
+                        ]
+                    );
+
+                if (
+                    memberResult.rowCount ===
+                    0
+                ) {
+                    return callback?.({
+                        success: false,
+                        message:
+                            "You are not a member of this conversation",
+                    });
+                }
+
+                let userActiveConversations =
+                    activeConversations.get(
+                        socket.user.id
+                    );
+
+                if (
+                    !userActiveConversations
+                ) {
+                    userActiveConversations =
+                        new Set();
+
+                    activeConversations.set(
+                        socket.user.id,
+                        userActiveConversations
+                    );
+                }
+
+                userActiveConversations.add(
+                    Number(conversationId)
+                );
+
+                console.log(
+                    `User ${socket.user.id} is actively viewing conversation:${conversationId}`
+                );
+
+                callback?.({
+                    success: true,
+                    conversationId,
+                });
+            } catch (error) {
+                console.error(
+                    "Conversation opened error:",
+                    error
+                );
+
+                callback?.({
+                    success: false,
+                    message:
+                        "Failed to mark conversation as opened",
+                });
+            }
+        }
+    );
+
+    /*
+     * =========================================================
+     * CONVERSATION CLOSED
+     * =========================================================
+     */
+    socket.on(
+        "conversationClosed",
+        (conversationId, callback) => {
+            try {
+                if (!conversationId) {
+                    return callback?.({
+                        success: false,
+                        message:
+                            "Conversation ID is required",
+                    });
+                }
+
+                const userActiveConversations =
+                    activeConversations.get(
+                        socket.user.id
+                    );
+
+                if (
+                    userActiveConversations
+                ) {
+                    userActiveConversations.delete(
+                        Number(conversationId)
+                    );
+
+                    if (
+                        userActiveConversations.size ===
+                        0
+                    ) {
+                        activeConversations.delete(
+                            socket.user.id
+                        );
+                    }
+                }
+
+                console.log(
+                    `User ${socket.user.id} stopped viewing conversation:${conversationId}`
+                );
+
+                callback?.({
+                    success: true,
+                    conversationId,
+                });
+            } catch (error) {
+                console.error(
+                    "Conversation closed error:",
+                    error
+                );
+
+                callback?.({
+                    success: false,
+                    message:
+                        "Failed to mark conversation as closed",
+                });
+            }
+        }
+    );
+
+    /*
+     * =========================================================
+     * GET CONVERSATION DETAILS
+     * =========================================================
+     */
     socket.on(
         "getConversationDetails",
         async (conversationId, callback) => {
@@ -243,7 +459,10 @@ io.on("connection", (socket) => {
                         ]
                     );
 
-                if (memberResult.rowCount === 0) {
+                if (
+                    memberResult.rowCount ===
+                    0
+                ) {
                     return callback?.({
                         success: false,
                         message:
@@ -251,26 +470,28 @@ io.on("connection", (socket) => {
                     });
                 }
 
-                const result = await pool.query(
-                    `
-                    SELECT
-                        u.id,
-                        u.full_name,
-                        u.email,
-                        u.role
-                    FROM conversation_members cm
-                    JOIN users u
-                        ON u.id = cm.user_id
-                    WHERE cm.conversation_id = $1
-                    ORDER BY u.full_name ASC
-                    `,
-                    [conversationId]
-                );
+                const result =
+                    await pool.query(
+                        `
+                        SELECT
+                            u.id,
+                            u.full_name,
+                            u.email,
+                            u.role
+                        FROM conversation_members cm
+                        JOIN users u
+                            ON u.id = cm.user_id
+                        WHERE cm.conversation_id = $1
+                        ORDER BY u.full_name ASC
+                        `,
+                        [conversationId]
+                    );
 
                 callback?.({
                     success: true,
                     conversationId,
-                    members: result.rows,
+                    members:
+                        result.rows,
                 });
             } catch (error) {
                 console.error(
@@ -287,9 +508,18 @@ io.on("connection", (socket) => {
         }
     );
 
+    /*
+     * =========================================================
+     * GET CONVERSATION MESSAGES
+     * =========================================================
+     */
     socket.on(
         "getConversationMessages",
         async (conversationId, callback) => {
+            console.log(
+                `GET_MESSAGES EVENT RECEIVED | conversation=${conversationId} | user=${socket.user.id}`
+            );
+
             try {
                 if (!conversationId) {
                     return callback?.({
@@ -313,7 +543,10 @@ io.on("connection", (socket) => {
                         ]
                     );
 
-                if (memberResult.rowCount === 0) {
+                if (
+                    memberResult.rowCount ===
+                    0
+                ) {
                     return callback?.({
                         success: false,
                         message:
@@ -321,28 +554,34 @@ io.on("connection", (socket) => {
                     });
                 }
 
-                const result = await pool.query(
-                    `
-                    SELECT
-                        m.id,
-                        m.conversation_id,
-                        m.sender_id,
-                        u.full_name AS sender_name,
-                        m.content,
-                        m.is_read,
-                        m.created_at
-                    FROM messages m
-                    JOIN users u
-                        ON u.id = m.sender_id
-                    WHERE m.conversation_id = $1
-                    ORDER BY m.created_at ASC
-                    `,
-                    [conversationId]
+                const result =
+                    await pool.query(
+                        `
+                        SELECT
+                            m.id,
+                            m.conversation_id,
+                            m.sender_id,
+                            u.full_name AS sender_name,
+                            m.content,
+                            m.is_read,
+                            m.created_at
+                        FROM messages m
+                        JOIN users u
+                            ON u.id = m.sender_id
+                        WHERE m.conversation_id = $1
+                        ORDER BY m.created_at ASC
+                        `,
+                        [conversationId]
+                    );
+
+                console.log(
+                    `Loaded ${result.rows.length} messages for conversation: ${conversationId}`
                 );
 
                 callback?.({
                     success: true,
-                    messages: result.rows,
+                    messages:
+                        result.rows,
                 });
             } catch (error) {
                 console.error(
@@ -359,9 +598,17 @@ io.on("connection", (socket) => {
         }
     );
 
+    /*
+     * =========================================================
+     * SEND MESSAGE
+     * =========================================================
+     */
     socket.on(
         "sendMessage",
-        async ({ conversationId, content }, callback) => {
+        async (
+            { conversationId, content },
+            callback
+        ) => {
             try {
                 if (
                     !conversationId ||
@@ -375,20 +622,27 @@ io.on("connection", (socket) => {
                     });
                 }
 
-                const memberResult = await pool.query(
-                    `
-                    SELECT 1
-                    FROM conversation_members
-                    WHERE conversation_id = $1
-                      AND user_id = $2
-                    `,
-                    [
-                        conversationId,
-                        socket.user.id,
-                    ]
-                );
+                /*
+                 * Verify sender membership.
+                 */
+                const memberResult =
+                    await pool.query(
+                        `
+                        SELECT 1
+                        FROM conversation_members
+                        WHERE conversation_id = $1
+                          AND user_id = $2
+                        `,
+                        [
+                            conversationId,
+                            socket.user.id,
+                        ]
+                    );
 
-                if (memberResult.rowCount === 0) {
+                if (
+                    memberResult.rowCount ===
+                    0
+                ) {
                     return callback({
                         success: false,
                         message:
@@ -396,49 +650,62 @@ io.on("connection", (socket) => {
                     });
                 }
 
-                const senderResult = await pool.query(
-                    `
-                    SELECT full_name
-                    FROM users
-                    WHERE id = $1
-                    `,
-                    [socket.user.id]
-                );
+                /*
+                 * Get sender name.
+                 */
+                const senderResult =
+                    await pool.query(
+                        `
+                        SELECT full_name
+                        FROM users
+                        WHERE id = $1
+                        `,
+                        [socket.user.id]
+                    );
 
                 const senderName =
-                    senderResult.rows[0]?.full_name ||
+                    senderResult.rows[0]
+                        ?.full_name ||
                     "Someone";
 
-                const result = await pool.query(
-                    `
-                    INSERT INTO messages
-                        (
+                /*
+                 * Save message.
+                 */
+                const result =
+                    await pool.query(
+                        `
+                        INSERT INTO messages
+                            (
+                                conversation_id,
+                                sender_id,
+                                content
+                            )
+                        VALUES
+                            ($1, $2, $3)
+                        RETURNING
+                            id,
                             conversation_id,
                             sender_id,
-                            content
-                        )
-                    VALUES
-                        ($1, $2, $3)
-                    RETURNING
-                        id,
-                        conversation_id,
-                        sender_id,
-                        content,
-                        is_read,
-                        created_at
-                    `,
-                    [
-                        conversationId,
-                        socket.user.id,
-                        content.trim(),
-                    ]
-                );
+                            content,
+                            is_read,
+                            created_at
+                        `,
+                        [
+                            conversationId,
+                            socket.user.id,
+                            content.trim(),
+                        ]
+                    );
 
                 const message = {
                     ...result.rows[0],
-                    sender_name: senderName,
+                    sender_name:
+                        senderName,
                 };
 
+                /*
+                 * Update conversation timestamp.
+                 */
                 await pool.query(
                     `
                     UPDATE conversations
@@ -448,25 +715,76 @@ io.on("connection", (socket) => {
                     [conversationId]
                 );
 
-                const membersResult = await pool.query(
-                    `
-                    SELECT user_id
-                    FROM conversation_members
-                    WHERE conversation_id = $1
-                      AND user_id != $2
-                    `,
-                    [
-                        conversationId,
-                        socket.user.id,
-                    ]
-                );
+                /*
+                 * Get all other participants.
+                 */
+                const membersResult =
+                    await pool.query(
+                        `
+                        SELECT user_id
+                        FROM conversation_members
+                        WHERE conversation_id = $1
+                          AND user_id != $2
+                        `,
+                        [
+                            conversationId,
+                            socket.user.id,
+                        ]
+                    );
 
+                /*
+                 * Send the message directly to every
+                 * participant's personal room.
+                 *
+                 * This means the message works even if the
+                 * participant is not currently inside the
+                 * conversation room.
+                 */
                 for (const member of membersResult.rows) {
+                    io.to(
+                        `user:${member.user_id}`
+                    ).emit(
+                        "newMessage",
+                        message
+                    );
+
+                    /*
+                     * Check whether this participant is
+                     * actively viewing this conversation.
+                     */
+                    const userActiveConversations =
+                        activeConversations.get(
+                            member.user_id
+                        );
+
+                    const isViewingConversation =
+                        userActiveConversations?.has(
+                            Number(
+                                conversationId
+                            )
+                        );
+
+                    if (
+                        isViewingConversation
+                    ) {
+                        console.log(
+                            `Skipping notification for user ${member.user_id}: actively viewing conversation:${conversationId}`
+                        );
+
+                        continue;
+                    }
+
+                    /*
+                     * User is NOT viewing the conversation,
+                     * so create a notification.
+                     */
                     await notificationService.createNotification(
                         {
-                            userId: member.user_id,
+                            userId:
+                                member.user_id,
                             type: "new_message",
-                            title: "New Message",
+                            title:
+                                "New Message",
                             message: `${senderName} sent you a new message.`,
                             referenceType:
                                 "conversation",
@@ -476,10 +794,9 @@ io.on("connection", (socket) => {
                     );
                 }
 
-                io.to(
-                    `conversation:${conversationId}`
-                ).emit("newMessage", message);
-
+                /*
+                 * Send confirmation to sender.
+                 */
                 callback({
                     success: true,
                     message,
@@ -499,6 +816,11 @@ io.on("connection", (socket) => {
         }
     );
 
+    /*
+     * =========================================================
+     * MARK MESSAGE AS READ
+     * =========================================================
+     */
     socket.on(
         "markAsRead",
         async (messageId, callback) => {
@@ -511,31 +833,35 @@ io.on("connection", (socket) => {
                     });
                 }
 
-                const result = await pool.query(
-                    `
-                    UPDATE messages
-                    SET is_read = true
-                    WHERE id = $1
-                      AND conversation_id IN (
-                          SELECT conversation_id
-                          FROM conversation_members
-                          WHERE user_id = $2
-                      )
-                    RETURNING
-                        id,
-                        conversation_id,
-                        sender_id,
-                        content,
-                        is_read,
-                        created_at
-                    `,
-                    [
-                        messageId,
-                        socket.user.id,
-                    ]
-                );
+                const result =
+                    await pool.query(
+                        `
+                        UPDATE messages
+                        SET is_read = true
+                        WHERE id = $1
+                          AND conversation_id IN (
+                              SELECT conversation_id
+                              FROM conversation_members
+                              WHERE user_id = $2
+                          )
+                        RETURNING
+                            id,
+                            conversation_id,
+                            sender_id,
+                            content,
+                            is_read,
+                            created_at
+                        `,
+                        [
+                            messageId,
+                            socket.user.id,
+                        ]
+                    );
 
-                if (result.rowCount === 0) {
+                if (
+                    result.rowCount ===
+                    0
+                ) {
                     return callback?.({
                         success: false,
                         message:
@@ -543,14 +869,24 @@ io.on("connection", (socket) => {
                     });
                 }
 
-                const message = result.rows[0];
+                const message =
+                    result.rows[0];
 
+                /*
+                 * Send read receipt to the sender's
+                 * personal room.
+                 */
                 io.to(
-                    `conversation:${message.conversation_id}`
-                ).emit("messageRead", {
-                    messageId: message.id,
-                    readBy: socket.user.id,
-                });
+                    `user:${message.sender_id}`
+                ).emit(
+                    "messageRead",
+                    {
+                        messageId:
+                            message.id,
+                        readBy:
+                            socket.user.id,
+                    }
+                );
 
                 callback?.({
                     success: true,
@@ -571,22 +907,41 @@ io.on("connection", (socket) => {
         }
     );
 
+    /*
+     * =========================================================
+     * DISCONNECT
+     * =========================================================
+     */
     socket.on("disconnect", () => {
         const userId = socket.user.id;
 
+        /*
+         * Remove this socket's active conversation state
+         * only when the user has no remaining connections.
+         *
+         * This is important because one user can have
+         * multiple browser tabs/windows open.
+         */
         const currentConnections =
             onlineUsers.get(userId) || 0;
 
         if (currentConnections <= 1) {
             onlineUsers.delete(userId);
 
+            activeConversations.delete(
+                userId
+            );
+
             console.log(
                 `User ${userId} is now offline`
             );
 
-            socket.broadcast.emit("userOffline", {
-                userId,
-            });
+            socket.broadcast.emit(
+                "userOffline",
+                {
+                    userId,
+                }
+            );
         } else {
             onlineUsers.set(
                 userId,
@@ -602,6 +957,11 @@ io.on("connection", (socket) => {
     });
 });
 
+/*
+ * =========================================================
+ * START SERVER
+ * =========================================================
+ */
 httpServer.listen(
     PORT,
     "127.0.0.1",

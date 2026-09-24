@@ -372,8 +372,68 @@ export default function Messages() {
     const selectedConversationId =
         selectedConversation?.id;
 
+    /*
+     * Tell the backend that this conversation is
+     * currently open in the user's browser.
+     */
     useEffect(() => {
-        if (!selectedConversationId) {
+        if (
+            !selectedConversationId ||
+            !connected
+        ) {
+            return undefined;
+        }
+
+        const socket = getSocket();
+
+        if (!socket?.connected) {
+            return undefined;
+        }
+
+        const conversationId =
+            Number(selectedConversationId);
+
+        socket.emit(
+            "conversationOpened",
+            conversationId,
+            (response) => {
+                if (!response?.success) {
+                    console.error(
+                        "Failed to mark conversation as opened:",
+                        response?.message
+                    );
+                }
+            }
+        );
+
+        return () => {
+            if (!socket?.connected) {
+                return;
+            }
+
+            socket.emit(
+                "conversationClosed",
+                conversationId
+            );
+        };
+    }, [
+        selectedConversationId,
+        connected,
+    ]);
+
+    /*
+     * Load messages whenever:
+     * 1. The selected conversation changes.
+     * 2. Socket.IO becomes connected.
+     *
+     * joinConversation and getConversationMessages
+     * are intentionally emitted separately.
+     */
+    useEffect(() => {
+        if (
+            !selectedConversationId ||
+            !connected
+        ) {
             return;
         }
 
@@ -383,56 +443,79 @@ export default function Messages() {
             return;
         }
 
+        const conversationId =
+            Number(selectedConversationId);
+
+        /*
+         * Join the conversation room.
+         */
         socket.emit(
             "joinConversation",
-            selectedConversationId,
+            conversationId,
             (joinResponse) => {
                 if (!joinResponse?.success) {
+                    console.error(
+                        "joinConversation failed:",
+                        joinResponse?.message
+                    );
+
                     setError(
                         joinResponse?.message ||
                             "Unable to join conversation."
                     );
 
                     setLoadingMessages(false);
+                }
+            }
+        );
+
+        /*
+         * Request messages separately.
+         *
+         * This does NOT wait for the join callback.
+         */
+        socket.emit(
+            "getConversationMessages",
+            conversationId,
+            (messageResponse) => {
+                console.log(
+                    "getConversationMessages response:",
+                    messageResponse
+                );
+
+                if (!messageResponse?.success) {
+                    console.error(
+                        "getConversationMessages failed:",
+                        messageResponse?.message
+                    );
+
+                    setError(
+                        messageResponse?.message ||
+                            "Unable to load messages."
+                    );
+
+                    setLoadingMessages(false);
                     return;
                 }
 
-                socket.emit(
-                    "getConversationMessages",
-                    selectedConversationId,
-                    (messageResponse) => {
-                        if (
-                            !messageResponse?.success
-                        ) {
-                            setError(
-                                messageResponse?.message ||
-                                    "Unable to load messages."
-                            );
+                const loadedMessages =
+                    messageResponse.messages || [];
 
-                            setLoadingMessages(false);
-                            return;
-                        }
+                setMessages(
+                    loadedMessages
+                );
 
-                        const loadedMessages =
-                            messageResponse.messages ||
-                            [];
+                setLoadingMessages(false);
+                setError("");
 
-                        setMessages(
-                            loadedMessages
-                        );
-
-                        setLoadingMessages(false);
-                        setError("");
-
-                        markUnreadMessagesAsRead(
-                            loadedMessages
-                        );
-                    }
+                markUnreadMessagesAsRead(
+                    loadedMessages
                 );
             }
         );
     }, [
         selectedConversationId,
+        connected,
         markUnreadMessagesAsRead,
     ]);
 
