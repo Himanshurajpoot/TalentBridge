@@ -5,6 +5,12 @@ function Profile() {
     const [profile, setProfile] = useState(null);
     const [skills, setSkills] = useState([]);
     const [availableSkills, setAvailableSkills] = useState([]);
+    const [portfolioProjects, setPortfolioProjects] = useState([]);
+    const [reviews, setReviews] = useState([]);
+    const [rating, setRating] = useState({
+        averageRating: 0,
+        reviewCount: 0,
+    });
 
     const [form, setForm] = useState({
         headline: "",
@@ -26,11 +32,43 @@ function Profile() {
     const [addingSkill, setAddingSkill] = useState(false);
     const [removingSkillId, setRemovingSkillId] = useState(null);
     const [updatingSkillId, setUpdatingSkillId] = useState(null);
+    const [portfolioLoading, setPortfolioLoading] = useState(true);
+    const [reviewsLoading, setReviewsLoading] = useState(true);
 
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
     const [skillError, setSkillError] = useState("");
     const [skillSuccess, setSkillSuccess] = useState("");
+    const [portfolioError, setPortfolioError] = useState("");
+    const [reviewsError, setReviewsError] = useState("");
+
+    const getLoggedInUserId = () => {
+        try {
+            const token = localStorage.getItem("token");
+
+            if (!token) {
+                return null;
+            }
+
+            const payload = JSON.parse(
+                atob(
+                    token
+                        .split(".")[1]
+                        .replace(/-/g, "+")
+                        .replace(/_/g, "/")
+                )
+            );
+
+            return payload.userId || null;
+        } catch (error) {
+            console.error(
+                "Failed to read logged-in user from token:",
+                error
+            );
+
+            return null;
+        }
+    };
 
     useEffect(() => {
         const fetchProfile = async () => {
@@ -100,9 +138,105 @@ function Profile() {
             }
         };
 
+        const fetchPortfolioProjects = async () => {
+            try {
+                setPortfolioLoading(true);
+                setPortfolioError("");
+
+                const userId = getLoggedInUserId();
+
+                if (!userId) {
+                    setPortfolioProjects([]);
+                    setPortfolioError(
+                        "Unable to identify the logged-in user."
+                    );
+                    return;
+                }
+
+                const response = await api.get(
+                    `/projects/user/${userId}/portfolio`
+                );
+
+                setPortfolioProjects(
+                    response.data.data.projects || []
+                );
+            } catch (error) {
+                console.error(
+                    "Failed to fetch portfolio projects:",
+                    error
+                );
+
+                setPortfolioError(
+                    error.response?.data?.message ||
+                        "Failed to load portfolio projects."
+                );
+            } finally {
+                setPortfolioLoading(false);
+            }
+        };
+
+        const fetchRatingAndReviews = async () => {
+            try {
+                setReviewsLoading(true);
+                setReviewsError("");
+
+                const userId = getLoggedInUserId();
+
+                if (!userId) {
+                    setRating({
+                        averageRating: 0,
+                        reviewCount: 0,
+                    });
+
+                    setReviews([]);
+
+                    setReviewsError(
+                        "Unable to identify the logged-in user."
+                    );
+
+                    return;
+                }
+
+                const [ratingResponse, reviewsResponse] =
+                    await Promise.all([
+                        api.get(
+                            `/users/${userId}/rating`
+                        ),
+                        api.get(
+                            `/users/${userId}/reviews`
+                        ),
+                    ]);
+
+                setRating(
+                    ratingResponse.data.data || {
+                        averageRating: 0,
+                        reviewCount: 0,
+                    }
+                );
+
+                setReviews(
+                    reviewsResponse.data.data.reviews || []
+                );
+            } catch (error) {
+                console.error(
+                    "Failed to fetch rating and reviews:",
+                    error
+                );
+
+                setReviewsError(
+                    error.response?.data?.message ||
+                        "Failed to load rating and reviews."
+                );
+            } finally {
+                setReviewsLoading(false);
+            }
+        };
+
         fetchProfile();
         fetchSkills();
         fetchAvailableSkills();
+        fetchPortfolioProjects();
+        fetchRatingAndReviews();
     }, []);
 
     const handleChange = (event) => {
@@ -336,6 +470,56 @@ function Profile() {
         }
     };
 
+    const getStatusStyles = (status) => {
+        if (status === "completed") {
+            return "bg-green-100 text-green-700";
+        }
+
+        if (status === "in_progress") {
+            return "bg-yellow-100 text-yellow-700";
+        }
+
+        return "bg-gray-100 text-gray-700";
+    };
+
+    const getStatusLabel = (status) => {
+        if (status === "completed") {
+            return "Completed";
+        }
+
+        if (status === "in_progress") {
+            return "In Progress";
+        }
+
+        return status;
+    };
+
+    const renderStars = (value) => {
+        const roundedRating = Math.round(
+            Number(value) || 0
+        );
+
+        return (
+            <div
+                className="flex items-center gap-1"
+                aria-label={`${value} out of 5 stars`}
+            >
+                {[1, 2, 3, 4, 5].map((star) => (
+                    <span
+                        key={star}
+                        className={
+                            star <= roundedRating
+                                ? "text-yellow-500"
+                                : "text-gray-300"
+                        }
+                    >
+                        ★
+                    </span>
+                ))}
+            </div>
+        );
+    };
+
     if (loading) {
         return (
             <div className="min-h-screen bg-gray-100">
@@ -351,7 +535,6 @@ function Profile() {
     return (
         <div className="min-h-screen bg-gray-100">
             <main className="mx-auto max-w-4xl px-6 py-10">
-
                 <div className="mb-8">
                     <h1 className="text-3xl font-bold text-gray-900">
                         My Profile
@@ -530,9 +713,144 @@ function Profile() {
                     </div>
                 </form>
 
+                {/* Rating Summary */}
+                <div className="mt-8 rounded-xl bg-white p-6 shadow-sm">
+                    <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <h2 className="text-xl font-semibold text-gray-900">
+                                Rating
+                            </h2>
+
+                            <p className="mt-1 text-sm text-gray-500">
+                                Feedback from clients and project partners.
+                            </p>
+                        </div>
+
+                        {!reviewsLoading && !reviewsError && (
+                            <div className="flex items-center gap-4">
+                                <div className="text-center">
+                                    <p className="text-3xl font-bold text-gray-900">
+                                        {Number(
+                                            rating.averageRating || 0
+                                        ).toFixed(2)}
+                                    </p>
+
+                                    <div className="mt-1">
+                                        {renderStars(
+                                            rating.averageRating
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="border-l border-gray-200 pl-4">
+                                    <p className="text-2xl font-semibold text-gray-900">
+                                        {rating.reviewCount || 0}
+                                    </p>
+
+                                    <p className="text-sm text-gray-500">
+                                        {rating.reviewCount === 1
+                                            ? "Review"
+                                            : "Reviews"}
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {reviewsLoading ? (
+                        <p className="mt-6 text-sm text-gray-500">
+                            Loading rating and reviews...
+                        </p>
+                    ) : reviewsError ? (
+                        <div className="mt-6 rounded-lg bg-red-50 p-4 text-sm text-red-600">
+                            {reviewsError}
+                        </div>
+                    ) : null}
+                </div>
+
+                {/* Reviews */}
+                {!reviewsLoading && !reviewsError && (
+                    <div className="mt-8 rounded-xl bg-white p-6 shadow-sm">
+                        <div>
+                            <h2 className="text-xl font-semibold text-gray-900">
+                                Reviews
+                            </h2>
+
+                            <p className="mt-1 text-sm text-gray-500">
+                                Reviews you have received from other users.
+                            </p>
+                        </div>
+
+                        {reviews.length === 0 ? (
+                            <div className="mt-6 rounded-lg border border-dashed border-gray-300 p-8 text-center">
+                                <p className="font-medium text-gray-700">
+                                    No reviews yet.
+                                </p>
+
+                                <p className="mt-2 text-sm text-gray-500">
+                                    Reviews from completed projects will
+                                    appear here.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="mt-6 space-y-5">
+                                {reviews.map((review) => (
+                                    <div
+                                        key={review.id}
+                                        className="rounded-xl border border-gray-200 p-5"
+                                    >
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                            <div>
+                                                <p className="font-semibold text-gray-900">
+                                                    {review.reviewer_name ||
+                                                        "Anonymous User"}
+                                                </p>
+
+                                                {review.project_title && (
+                                                    <p className="mt-1 text-sm text-gray-500">
+                                                        Project:{" "}
+                                                        {
+                                                            review.project_title
+                                                        }
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            <div className="flex flex-col items-start sm:items-end">
+                                                {renderStars(
+                                                    review.rating
+                                                )}
+
+                                                <span className="mt-1 text-sm text-gray-500">
+                                                    {review.rating}/5
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        {review.comment && (
+                                            <p className="mt-4 leading-6 text-gray-700">
+                                                {review.comment}
+                                            </p>
+                                        )}
+
+                                        {review.created_at && (
+                                            <p className="mt-4 text-xs text-gray-400">
+                                                {new Date(
+                                                    review.created_at
+                                                ).toLocaleDateString(
+                                                    "en-IN"
+                                                )}
+                                            </p>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* Skills */}
                 <div className="mt-8 rounded-xl bg-white p-6 shadow-sm">
-
                     <h2 className="text-xl font-semibold text-gray-900">
                         My Skills
                     </h2>
@@ -543,7 +861,6 @@ function Profile() {
                         </p>
                     ) : (
                         <div className="mt-5 space-y-3">
-
                             {skills.map((skill) => (
                                 <div
                                     key={skill.id}
@@ -560,8 +877,6 @@ function Profile() {
                                     </div>
 
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-
-                                        {/* Edit Proficiency */}
                                         <select
                                             value={
                                                 skill.proficiency ||
@@ -603,7 +918,6 @@ function Profile() {
                                             </span>
                                         )}
 
-                                        {/* Remove Skill */}
                                         <button
                                             type="button"
                                             onClick={() =>
@@ -625,11 +939,9 @@ function Profile() {
                                     </div>
                                 </div>
                             ))}
-
                         </div>
                     )}
 
-                    {/* Skill Messages */}
                     {skillError && (
                         <p className="mt-4 text-sm text-red-600">
                             {skillError}
@@ -652,7 +964,6 @@ function Profile() {
                         </h3>
 
                         <div className="mt-4 grid gap-4 md:grid-cols-2">
-
                             <div>
                                 <label
                                     htmlFor="skillId"
@@ -719,7 +1030,6 @@ function Profile() {
                                     </option>
                                 </select>
                             </div>
-
                         </div>
 
                         <button
@@ -734,16 +1044,168 @@ function Profile() {
                     </form>
                 </div>
 
+                {/* Portfolio */}
+                <div className="mt-8 rounded-xl bg-white p-6 shadow-sm">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="text-xl font-semibold text-gray-900">
+                                My Portfolio
+                            </h2>
+
+                            <p className="mt-1 text-sm text-gray-500">
+                                Projects you have been hired for.
+                            </p>
+                        </div>
+
+                        {!portfolioLoading &&
+                            portfolioProjects.length > 0 && (
+                                <span className="rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700">
+                                    {portfolioProjects.length}{" "}
+                                    {portfolioProjects.length === 1
+                                        ? "Project"
+                                        : "Projects"}
+                                </span>
+                            )}
+                    </div>
+
+                    {portfolioLoading ? (
+                        <p className="mt-6 text-sm text-gray-500">
+                            Loading portfolio...
+                        </p>
+                    ) : portfolioError ? (
+                        <div className="mt-6 rounded-lg bg-red-50 p-4 text-sm text-red-600">
+                            {portfolioError}
+                        </div>
+                    ) : portfolioProjects.length === 0 ? (
+                        <div className="mt-6 rounded-lg border border-dashed border-gray-300 p-8 text-center">
+                            <p className="font-medium text-gray-700">
+                                No portfolio projects yet.
+                            </p>
+
+                            <p className="mt-2 text-sm text-gray-500">
+                                Projects with accepted proposals will
+                                appear here when they are in progress
+                                or completed.
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="mt-6 space-y-5">
+                            {portfolioProjects.map(
+                                (project) => (
+                                    <div
+                                        key={project.id}
+                                        className="rounded-xl border border-gray-200 p-5"
+                                    >
+                                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                            <div>
+                                                <h3 className="text-lg font-semibold text-gray-900">
+                                                    {project.title}
+                                                </h3>
+
+                                                {project.company_name && (
+                                                    <p className="mt-1 text-sm text-gray-500">
+                                                        {
+                                                            project.company_name
+                                                        }
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            <span
+                                                className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${getStatusStyles(
+                                                    project.status
+                                                )}`}
+                                            >
+                                                {getStatusLabel(
+                                                    project.status
+                                                )}
+                                            </span>
+                                        </div>
+
+                                        <p className="mt-4 text-sm leading-6 text-gray-600">
+                                            {project.description}
+                                        </p>
+
+                                        <div className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
+                                            <div>
+                                                <p className="text-gray-500">
+                                                    Budget
+                                                </p>
+
+                                                <p className="mt-1 font-medium text-gray-900">
+                                                    {project.budget_min !=
+                                                        null &&
+                                                    project.budget_max !=
+                                                        null
+                                                        ? `₹${Number(
+                                                              project.budget_min
+                                                          ).toLocaleString(
+                                                              "en-IN"
+                                                          )} - ₹${Number(
+                                                              project.budget_max
+                                                          ).toLocaleString(
+                                                              "en-IN"
+                                                          )}`
+                                                        : project.budget_min !=
+                                                          null
+                                                        ? `From ₹${Number(
+                                                              project.budget_min
+                                                          ).toLocaleString(
+                                                              "en-IN"
+                                                          )}`
+                                                        : project.budget_max !=
+                                                          null
+                                                        ? `Up to ₹${Number(
+                                                              project.budget_max
+                                                          ).toLocaleString(
+                                                              "en-IN"
+                                                          )}`
+                                                        : "Not provided"}
+                                                </p>
+                                            </div>
+
+                                            <div>
+                                                <p className="text-gray-500">
+                                                    Experience Level
+                                                </p>
+
+                                                <p className="mt-1 font-medium capitalize text-gray-900">
+                                                    {project.experience_level ||
+                                                        "Not provided"}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {project.deadline && (
+                                            <div className="mt-4 text-sm">
+                                                <span className="text-gray-500">
+                                                    Deadline:{" "}
+                                                </span>
+
+                                                <span className="font-medium text-gray-900">
+                                                    {new Date(
+                                                        project.deadline
+                                                    ).toLocaleDateString(
+                                                        "en-IN"
+                                                    )}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            )}
+                        </div>
+                    )}
+                </div>
+
                 {/* Current Profile */}
                 {profile && (
                     <div className="mt-8 rounded-xl bg-white p-6 shadow-sm">
-
                         <h2 className="text-xl font-semibold text-gray-900">
                             Current Profile
                         </h2>
 
                         <div className="mt-4 grid gap-3 text-sm text-gray-600">
-
                             <p>
                                 <strong>
                                     Headline:
@@ -777,11 +1239,9 @@ function Profile() {
                                     ? `${profile.experience_years} years`
                                     : "Not provided"}
                             </p>
-
                         </div>
                     </div>
                 )}
-
             </main>
         </div>
     );
