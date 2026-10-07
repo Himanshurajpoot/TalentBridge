@@ -397,7 +397,6 @@ function Jobs() {
                                 min="0"
                                 value={filters.minSalary}
                                 onChange={handleChange}
-                                placeholder="400000"
                                 className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                             />
                         </div>
@@ -417,7 +416,6 @@ function Jobs() {
                                 min="0"
                                 value={filters.maxSalary}
                                 onChange={handleChange}
-                                placeholder="700000"
                                 className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                             />
                         </div>
