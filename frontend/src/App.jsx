@@ -21,6 +21,7 @@ import CreateJob from "./pages/CreateJob";
 import MyJobs from "./pages/MyJobs";
 import JobApplications from "./pages/JobApplications";
 import Messages from "./pages/Messages";
+import CreateProject from "./pages/CreateProject";
 
 function ProtectedRoute({ children }) {
     const { user, loading } = useAuth();
@@ -75,6 +76,17 @@ function App() {
                     <ProtectedRoute>
                         <MainLayout>
                             <Projects />
+                        </MainLayout>
+                    </ProtectedRoute>
+                }
+            />
+
+            <Route
+                path="/create-project"
+                element={
+                    <ProtectedRoute>
+                        <MainLayout>
+                            <CreateProject />
                         </MainLayout>
                     </ProtectedRoute>
                 }
