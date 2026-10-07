@@ -6,7 +6,10 @@ function CreateJob() {
     const navigate = useNavigate();
 
     const [companies, setCompanies] = useState([]);
+    const [skills, setSkills] = useState([]);
+
     const [loadingCompanies, setLoadingCompanies] = useState(true);
+    const [loadingSkills, setLoadingSkills] = useState(true);
 
     const [formData, setFormData] = useState({
         companyId: "",
@@ -21,6 +24,8 @@ function CreateJob() {
         applicationDeadline: "",
     });
 
+    const [selectedSkillIds, setSelectedSkillIds] = useState([]);
+
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
@@ -29,7 +34,7 @@ function CreateJob() {
             try {
                 const response = await api.get("/companies");
 
-                setCompanies(response.data.data.companies);
+                setCompanies(response.data.data.companies || []);
             } catch (error) {
                 console.error("Failed to fetch companies:", error);
 
@@ -42,7 +47,30 @@ function CreateJob() {
             }
         };
 
+        const fetchSkills = async () => {
+            try {
+                const response = await api.get("/skills");
+
+                setSkills(
+                    response.data.data.skills || []
+                );
+            } catch (error) {
+                console.error(
+                    "Failed to fetch skills:",
+                    error
+                );
+
+                setError(
+                    error.response?.data?.message ||
+                        "Failed to load available skills."
+                );
+            } finally {
+                setLoadingSkills(false);
+            }
+        };
+
         fetchCompanies();
+        fetchSkills();
     }, []);
 
     const handleChange = (event) => {
@@ -52,6 +80,18 @@ function CreateJob() {
             ...current,
             [name]: type === "checkbox" ? checked : value,
         }));
+    };
+
+    const handleSkillChange = (skillId) => {
+        setSelectedSkillIds((current) => {
+            if (current.includes(skillId)) {
+                return current.filter(
+                    (id) => id !== skillId
+                );
+            }
+
+            return [...current, skillId];
+        });
     };
 
     const handleSubmit = async (event) => {
@@ -77,6 +117,7 @@ function CreateJob() {
                     : null,
                 applicationDeadline:
                     formData.applicationDeadline || null,
+                skillIds: selectedSkillIds,
             });
 
             navigate("/my-jobs");
@@ -92,11 +133,11 @@ function CreateJob() {
         }
     };
 
-    if (loadingCompanies) {
+    if (loadingCompanies || loadingSkills) {
         return (
             <div className="min-h-screen flex items-center justify-center">
                 <p className="text-gray-600">
-                    Loading your companies...
+                    Loading job form...
                 </p>
             </div>
         );
@@ -314,6 +355,59 @@ function CreateJob() {
                                     This job supports remote work
                                 </span>
                             </label>
+
+                            <div>
+                                <h2 className="text-sm font-medium text-gray-700">
+                                    Skills
+                                </h2>
+
+                                <p className="mt-1 text-sm text-gray-500">
+                                    Select the skills required
+                                    for this job.
+                                </p>
+
+                                {skills.length === 0 ? (
+                                    <p className="mt-3 text-sm text-gray-500">
+                                        No skills available.
+                                    </p>
+                                ) : (
+                                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                        {skills.map(
+                                            (skill) => (
+                                                <label
+                                                    key={
+                                                        skill.id
+                                                    }
+                                                    className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 hover:bg-gray-50"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedSkillIds.includes(
+                                                            Number(
+                                                                skill.id
+                                                            )
+                                                        )}
+                                                        onChange={() =>
+                                                            handleSkillChange(
+                                                                Number(
+                                                                    skill.id
+                                                                )
+                                                            )
+                                                        }
+                                                        className="h-4 w-4 rounded border-gray-300"
+                                                    />
+
+                                                    <span className="text-sm font-medium text-gray-700">
+                                                        {
+                                                            skill.name
+                                                        }
+                                                    </span>
+                                                </label>
+                                            )
+                                        )}
+                                    </div>
+                                )}
+                            </div>
 
                             <div className="grid gap-6 md:grid-cols-2">
                                 <div>
