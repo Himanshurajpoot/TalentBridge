@@ -1,8 +1,10 @@
 const pool = require("../config/db");
 
 const isPositiveInteger = (value) => {
-    return Number.isInteger(Number(value)) &&
-        Number(value) > 0;
+    return (
+        Number.isInteger(Number(value)) &&
+        Number(value) > 0
+    );
 };
 
 const isNonNegativeNumber = (value) => {
@@ -26,6 +28,8 @@ const isValidDate = (value) => {
 };
 
 const createJob = async (req, res) => {
+    let client;
+
     try {
         const {
             companyId,
@@ -38,6 +42,7 @@ const createJob = async (req, res) => {
             salaryMin,
             salaryMax,
             applicationDeadline,
+            skillIds,
         } = req.body;
 
         if (
@@ -97,9 +102,7 @@ const createJob = async (req, res) => {
 
         if (
             typeof employmentType !== "string" ||
-            !allowedEmploymentTypes.includes(
-                employmentType
-            )
+            !allowedEmploymentTypes.includes(employmentType)
         ) {
             return res.status(400).json({
                 success: false,
@@ -172,8 +175,7 @@ const createJob = async (req, res) => {
         ) {
             return res.status(400).json({
                 success: false,
-                message:
-                    "salaryMin cannot be greater than salaryMax",
+                message: "salaryMin cannot be greater than salaryMax",
             });
         }
 
@@ -201,12 +203,56 @@ const createJob = async (req, res) => {
             }
         }
 
-        const companyResult = await pool.query(
+        let normalizedSkillIds = [];
+
+        if (skillIds !== undefined) {
+            if (!Array.isArray(skillIds)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "skillIds must be an array",
+                });
+            }
+
+            if (
+                skillIds.some(
+                    (skillId) =>
+                        typeof skillId !== "number" ||
+                        !Number.isSafeInteger(skillId) ||
+                        skillId <= 0
+                )
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "skillIds must contain only positive integers",
+                });
+            }
+
+            normalizedSkillIds = skillIds;
+
+            if (
+                new Set(normalizedSkillIds).size !==
+                normalizedSkillIds.length
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "skillIds must not contain duplicates",
+                });
+            }
+        }
+
+        client = await pool.connect();
+
+        await client.query("BEGIN");
+
+        const companyResult = await client.query(
             "SELECT id, owner_id FROM companies WHERE id = $1",
             [Number(companyId)]
         );
 
         if (companyResult.rows.length === 0) {
+            await client.query("ROLLBACK");
+
             return res.status(404).json({
                 success: false,
                 message: "Company not found",
@@ -218,6 +264,8 @@ const createJob = async (req, res) => {
             Number(companyResult.rows[0].owner_id) !==
                 Number(req.user.id)
         ) {
+            await client.query("ROLLBACK");
+
             return res.status(403).json({
                 success: false,
                 message:
@@ -225,7 +273,29 @@ const createJob = async (req, res) => {
             });
         }
 
-        const result = await pool.query(
+        if (normalizedSkillIds.length > 0) {
+            const skillResult = await client.query(
+                `SELECT id
+                 FROM skills
+                 WHERE id = ANY($1::bigint[])`,
+                [normalizedSkillIds]
+            );
+
+            if (
+                skillResult.rows.length !==
+                normalizedSkillIds.length
+            ) {
+                await client.query("ROLLBACK");
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "One or more skill IDs are invalid",
+                });
+            }
+        }
+
+        const result = await client.query(
             `INSERT INTO jobs (
                 company_id,
                 posted_by,
@@ -264,20 +334,51 @@ const createJob = async (req, res) => {
             ]
         );
 
+        const job = result.rows[0];
+
+        if (normalizedSkillIds.length > 0) {
+            await client.query(
+                `INSERT INTO job_skills (
+                    job_id,
+                    skill_id
+                )
+                SELECT $1, UNNEST($2::bigint[])`,
+                [job.id, normalizedSkillIds]
+            );
+        }
+
+        await client.query("COMMIT");
+
         return res.status(201).json({
             success: true,
             message: "Job created successfully",
             data: {
-                job: result.rows[0],
+                job,
+                skillIds: normalizedSkillIds,
             },
         });
     } catch (error) {
+        if (client) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error(
+                    "Create job rollback error:",
+                    rollbackError
+                );
+            }
+        }
+
         console.error("Create job error:", error);
 
         return res.status(500).json({
             success: false,
             message: "Internal server error",
         });
+    } finally {
+        if (client) {
+            client.release();
+        }
     }
 };
 
@@ -292,6 +393,7 @@ const getJobs = async (req, res) => {
             isRemote,
             minSalary,
             maxSalary,
+            skill,
         } = req.query;
 
         if (
@@ -395,6 +497,16 @@ const getJobs = async (req, res) => {
             });
         }
 
+        if (
+            skill !== undefined &&
+            typeof skill !== "string"
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "skill must be a string",
+            });
+        }
+
         const pageNumber = Math.max(
             parseInt(page, 10) || 1,
             1
@@ -456,6 +568,21 @@ const getJobs = async (req, res) => {
 
             conditions.push(
                 `j.salary_min <= $${values.length}`
+            );
+        }
+
+        if (skill?.trim()) {
+            values.push(`%${skill.trim()}%`);
+
+            conditions.push(
+                `EXISTS (
+                    SELECT 1
+                    FROM job_skills js
+                    JOIN skills s
+                        ON s.id = js.skill_id
+                    WHERE js.job_id = j.id
+                      AND s.name ILIKE $${values.length}
+                )`
             );
         }
 
