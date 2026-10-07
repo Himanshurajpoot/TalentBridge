@@ -112,6 +112,148 @@ describe("Applications API", () => {
         }
     });
 
+    const verifyStatusTransition = async (
+        initialStatus,
+        requestedStatus,
+        expectedStatusCode
+    ) => {
+        let isolatedJobId;
+        let isolatedApplicationId;
+
+        try {
+            const jobResponse = await request(app)
+                .post("/api/jobs")
+                .set(
+                    "Authorization",
+                    `Bearer ${clientToken}`
+                )
+                .send({
+                    companyId,
+                    title: "Isolated Application Transition Job",
+                    description:
+                        "Temporary job for application transition testing.",
+                    employmentType: "full_time",
+                    experienceLevel: "mid",
+                    location: "Noida",
+                    isRemote: true,
+                    salaryMin: 50000,
+                    salaryMax: 80000,
+                    applicationDeadline:
+                        "2027-12-31T23:59:59.000Z",
+                });
+
+            expect(jobResponse.statusCode).toBe(201);
+            isolatedJobId = jobResponse.body.data.job.id;
+
+            const applicationResponse = await request(app)
+                .post(
+                    `/api/jobs/${isolatedJobId}/applications`
+                )
+                .set(
+                    "Authorization",
+                    `Bearer ${freelancerToken}`
+                )
+                .send({
+                    coverLetter:
+                        "Testing an application status transition.",
+                });
+
+            expect(applicationResponse.statusCode).toBe(201);
+            isolatedApplicationId =
+                applicationResponse.body.data.application.id;
+
+            if (initialStatus !== "pending") {
+                await pool.query(
+                    "UPDATE applications SET status = $1 WHERE id = $2",
+                    [initialStatus, isolatedApplicationId]
+                );
+            }
+
+            const response = await request(app)
+                .patch(
+                    `/api/jobs/${isolatedJobId}/applications/${isolatedApplicationId}`
+                )
+                .set(
+                    "Authorization",
+                    `Bearer ${clientToken}`
+                )
+                .send({ status: requestedStatus });
+
+            expect(response.statusCode).toBe(expectedStatusCode);
+
+            if (expectedStatusCode === 409) {
+                expect(response.body).toEqual({
+                    success: false,
+                    message: "Invalid application status transition",
+                });
+            } else {
+                expect(response.body).toMatchObject({
+                    success: true,
+                    data: {
+                        application: {
+                            id: isolatedApplicationId,
+                            status: requestedStatus,
+                        },
+                    },
+                });
+            }
+        } finally {
+            if (isolatedApplicationId) {
+                await pool.query(
+                    "DELETE FROM applications WHERE id = $1",
+                    [isolatedApplicationId]
+                );
+            }
+
+            if (isolatedJobId) {
+                await pool.query(
+                    "DELETE FROM jobs WHERE id = $1",
+                    [isolatedJobId]
+                );
+            }
+        }
+    };
+
+    test("PATCH application status should allow pending to reviewing", async () => {
+        await verifyStatusTransition(
+            "pending",
+            "reviewing",
+            200
+        );
+    });
+
+    test("PATCH application status should allow reviewing to shortlisted", async () => {
+        await verifyStatusTransition(
+            "reviewing",
+            "shortlisted",
+            200
+        );
+    });
+
+    test("PATCH application status should reject shortlisted to pending", async () => {
+        await verifyStatusTransition(
+            "shortlisted",
+            "pending",
+            409
+        );
+    });
+
+    test("PATCH application status should reject rejected to accepted", async () => {
+        await verifyStatusTransition(
+            "rejected",
+            "accepted",
+            409
+        );
+    });
+
+    test("PATCH application status should reject accepted to rejected", async () => {
+        await verifyStatusTransition(
+            "accepted",
+            "rejected",
+            409
+        );
+    });
+
     test("POST application should reject request without token", async () => {
         const response = await request(app)
             .post(

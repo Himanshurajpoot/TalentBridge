@@ -396,6 +396,30 @@ const updateApplicationStatus = async (
             });
         }
 
+        const allowedTransitions = {
+            pending: [
+                "reviewing",
+                "shortlisted",
+                "rejected",
+                "accepted",
+            ],
+            reviewing: [
+                "shortlisted",
+                "rejected",
+                "accepted",
+            ],
+            shortlisted: ["accepted", "rejected"],
+            accepted: [],
+            rejected: [],
+        };
+
+        if (!allowedTransitions[application.status]?.includes(status)) {
+            return res.status(409).json({
+                success: false,
+                message: "Invalid application status transition",
+            });
+        }
+
         const result = await pool.query(
             `
             UPDATE applications
