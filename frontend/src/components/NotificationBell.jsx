@@ -241,8 +241,9 @@ export default function NotificationBell() {
                     `/projects/${notification.reference_id}/proposals`
                 );
             } else if (
-                notification.type ===
-                "proposal_accepted"
+                notification.type === "proposal_accepted" ||
+                notification.type === "review_received" ||
+                notification.type === "project_completed"
             ) {
                 navigate(
                     `/projects/${notification.reference_id}`
