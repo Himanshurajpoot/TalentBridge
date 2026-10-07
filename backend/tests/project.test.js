@@ -8,6 +8,7 @@ describe("Projects API", () => {
     let freelancerToken;
     let companyId;
     let projectId;
+    const portfolioProjectIds = [];
 
     beforeAll(async () => {
         const clientLogin = await request(app)
@@ -59,6 +60,18 @@ describe("Projects API", () => {
     });
 
     afterAll(async () => {
+        if (portfolioProjectIds.length > 0) {
+            await pool.query(
+                "DELETE FROM proposals WHERE project_id = ANY($1::bigint[])",
+                [portfolioProjectIds]
+            );
+
+            await pool.query(
+                "DELETE FROM projects WHERE id = ANY($1::bigint[])",
+                [portfolioProjectIds]
+            );
+        }
+
         if (projectId) {
             await pool.query(
                 "DELETE FROM projects WHERE id = $1",
@@ -359,6 +372,160 @@ describe("Projects API", () => {
             success: false,
             message:
                 "Only in-progress projects can be completed",
+        });
+    });
+
+    test("GET /api/projects/user/:userId/portfolio should require authentication", async () => {
+        const response = await request(app)
+            .get("/api/projects/user/2/portfolio");
+
+        expect(response.statusCode).toBe(401);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Authentication required",
+        });
+    });
+
+    test("GET /api/projects/user/:userId/portfolio should return accepted in-progress and completed projects", async () => {
+        const fixtures = [
+            {
+                title: "Portfolio In Progress Project",
+                status: "in_progress",
+                proposalStatus: "accepted",
+            },
+            {
+                title: "Portfolio Completed Project",
+                status: "completed",
+                proposalStatus: "accepted",
+            },
+            {
+                title: "Portfolio Pending Proposal Project",
+                status: "in_progress",
+                proposalStatus: "pending",
+            },
+            {
+                title: "Portfolio Open Project",
+                status: "open",
+                proposalStatus: "accepted",
+            },
+        ];
+        const proposalIds = [];
+
+        for (const fixture of fixtures) {
+            const projectResponse = await request(app)
+                .post("/api/projects")
+                .set(
+                    "Authorization",
+                    `Bearer ${clientToken}`
+                )
+                .send({
+                    companyId,
+                    title: fixture.title,
+                    description: "Portfolio API test fixture.",
+                    budgetMin: 50000,
+                    budgetMax: 90000,
+                });
+
+            expect(projectResponse.statusCode).toBe(201);
+
+            const createdProject =
+                projectResponse.body.data.project;
+
+            portfolioProjectIds.push(createdProject.id);
+
+            const proposalResponse = await request(app)
+                .post(
+                    `/api/projects/${createdProject.id}/proposals`
+                )
+                .set(
+                    "Authorization",
+                    `Bearer ${freelancerToken}`
+                )
+                .send({
+                    coverLetter: "Portfolio API test proposal.",
+                    proposedBudget: 70000,
+                    estimatedDays: 30,
+                });
+
+            expect(proposalResponse.statusCode).toBe(201);
+
+            proposalIds.push(
+                proposalResponse.body.data.proposal.id
+            );
+        }
+
+        await pool.query(
+            `UPDATE projects
+             SET status = CASE id
+                 WHEN $1 THEN 'in_progress'
+                 WHEN $2 THEN 'completed'
+                 WHEN $3 THEN 'in_progress'
+                 WHEN $4 THEN 'open'
+             END
+             WHERE id = ANY($5::bigint[])`,
+            [...portfolioProjectIds, portfolioProjectIds]
+        );
+
+        await pool.query(
+            `UPDATE proposals
+             SET status = CASE id
+                 WHEN $1 THEN 'accepted'
+                 WHEN $2 THEN 'accepted'
+                 WHEN $3 THEN 'pending'
+                 WHEN $4 THEN 'accepted'
+             END
+             WHERE id = ANY($5::bigint[])`,
+            [...proposalIds, proposalIds]
+        );
+
+        const response = await request(app)
+            .get("/api/projects/user/2/portfolio")
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(
+            Array.isArray(response.body.data.projects)
+        ).toBe(true);
+
+        const fixtureProjects =
+            response.body.data.projects.filter(
+                (project) =>
+                    portfolioProjectIds.includes(project.id)
+            );
+
+        expect(
+            fixtureProjects.map(
+                (project) => project.id
+            ).sort()
+        ).toEqual(
+            portfolioProjectIds.slice(0, 2).sort()
+        );
+
+        const inProgressProject =
+            fixtureProjects.find(
+                (project) =>
+                    project.id === portfolioProjectIds[0]
+            );
+        const completedProject =
+            fixtureProjects.find(
+                (project) =>
+                    project.id === portfolioProjectIds[1]
+            );
+
+        expect(inProgressProject).toMatchObject({
+            budget_min: "50000.00",
+            budget_max: "90000.00",
+            status: "in_progress",
+        });
+        expect(completedProject).toMatchObject({
+            budget_min: "50000.00",
+            budget_max: "90000.00",
+            status: "completed",
         });
     });
 });

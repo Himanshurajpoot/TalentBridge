@@ -477,6 +477,65 @@ const getMyProjects = async (req, res) => {
     }
 };
 
+const getUserPortfolioProjects = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!userId || !/^\d+$/.test(userId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid user ID",
+            });
+        }
+
+        const result = await pool.query(
+            `SELECT
+                p.id,
+                p.client_id,
+                p.company_id,
+                p.title,
+                p.description,
+                p.budget_min,
+                p.budget_max,
+                p.experience_level,
+                p.status,
+                p.deadline,
+                p.created_at,
+                p.updated_at,
+                c.name AS company_name
+
+             FROM projects p
+
+             INNER JOIN proposals pr
+                ON pr.project_id = p.id
+
+             LEFT JOIN companies c
+                ON c.id = p.company_id
+
+             WHERE pr.freelancer_id = $1
+               AND pr.status = 'accepted'
+               AND p.status IN ('in_progress', 'completed')
+
+             ORDER BY p.updated_at DESC`,
+            [userId]
+        );
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                projects: result.rows,
+            },
+        });
+    } catch (error) {
+        console.error("Get user portfolio projects error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error",
+        });
+    }
+};
+
 const completeProject = async (req, res) => {
     const client = await pool.connect();
 
@@ -610,4 +669,5 @@ module.exports = {
     addProjectSkill,
     getProjectSkills,
     completeProject,
+    getUserPortfolioProjects,
 };

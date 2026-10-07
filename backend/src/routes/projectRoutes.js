@@ -8,6 +8,7 @@ const {
     addProjectSkill,
     getProjectSkills,
     completeProject,
+    getUserPortfolioProjects,
 } = require("../controllers/projectController");
 
 const authenticate = require("../middleware/authMiddleware");
@@ -25,6 +26,12 @@ router.get(
     authenticate,
     authorize("client", "admin"),
     getMyProjects
+);
+
+router.get(
+    "/user/:userId/portfolio",
+    authenticate,
+    getUserPortfolioProjects
 );
 
 router.post(
