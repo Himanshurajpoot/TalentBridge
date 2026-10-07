@@ -175,6 +175,144 @@ describe("Proposals API", () => {
         }
     });
 
+    const verifyStatusTransition = async (
+        initialStatus,
+        requestedStatus,
+        expectedStatusCode
+    ) => {
+        let isolatedProjectId;
+        let isolatedProposalId;
+
+        try {
+            const projectResponse = await request(app)
+                .post("/api/projects")
+                .set(
+                    "Authorization",
+                    `Bearer ${clientToken}`
+                )
+                .send({
+                    companyId,
+                    title: "Isolated Proposal Transition Project",
+                    description:
+                        "Temporary project for proposal transition testing.",
+                    budgetMin: 50000,
+                    budgetMax: 90000,
+                    experienceLevel: "mid",
+                    deadline: "2027-12-31T23:59:59.000Z",
+                });
+
+            expect(projectResponse.statusCode).toBe(201);
+            isolatedProjectId =
+                projectResponse.body.data.project.id;
+
+            const proposalResponse = await request(app)
+                .post(
+                    `/api/projects/${isolatedProjectId}/proposals`
+                )
+                .set(
+                    "Authorization",
+                    `Bearer ${freelancerToken}`
+                )
+                .send({
+                    coverLetter: "Testing a proposal status transition.",
+                    proposedBudget: 60000,
+                    estimatedDays: 15,
+                });
+
+            expect(proposalResponse.statusCode).toBe(201);
+            isolatedProposalId =
+                proposalResponse.body.data.proposal.id;
+
+            await pool.query(
+                "UPDATE proposals SET status = $1 WHERE id = $2",
+                [initialStatus, isolatedProposalId]
+            );
+
+            const response = await request(app)
+                .patch(
+                    `/api/projects/${isolatedProjectId}/proposals/${isolatedProposalId}/status`
+                )
+                .set(
+                    "Authorization",
+                    `Bearer ${clientToken}`
+                )
+                .send({ status: requestedStatus });
+
+            expect(response.statusCode).toBe(expectedStatusCode);
+
+            if (expectedStatusCode === 409) {
+                expect(response.body).toEqual({
+                    success: false,
+                    message: "Invalid proposal status transition",
+                });
+            } else {
+                expect(response.body).toMatchObject({
+                    success: true,
+                    data: {
+                        proposal: {
+                            id: isolatedProposalId,
+                            status: requestedStatus,
+                        },
+                    },
+                });
+            }
+        } finally {
+            if (isolatedProposalId) {
+                await pool.query(
+                    "DELETE FROM proposals WHERE id = $1",
+                    [isolatedProposalId]
+                );
+            }
+
+            if (isolatedProjectId) {
+                await pool.query(
+                    "DELETE FROM projects WHERE id = $1",
+                    [isolatedProjectId]
+                );
+            }
+        }
+    };
+
+    test("PATCH proposal status should allow pending to shortlisted", async () => {
+        await verifyStatusTransition(
+            "pending",
+            "shortlisted",
+            200
+        );
+    });
+
+    test("PATCH proposal status should reject shortlisted to pending", async () => {
+        await verifyStatusTransition(
+            "shortlisted",
+            "pending",
+            409
+        );
+    });
+
+    test("PATCH proposal status should reject rejected to accepted", async () => {
+        await verifyStatusTransition(
+            "rejected",
+            "accepted",
+            409
+        );
+    });
+
+    test("PATCH proposal status should reject accepted to rejected", async () => {
+        await verifyStatusTransition(
+            "accepted",
+            "rejected",
+            409
+        );
+    });
+
+    test("PATCH proposal status should reject withdrawn to shortlisted", async () => {
+        await verifyStatusTransition(
+            "withdrawn",
+            "shortlisted",
+            409
+        );
+    });
+
     test("POST proposal should reject request without token", async () => {
         const response = await request(app)
             .post(
@@ -587,6 +725,11 @@ describe("Proposals API", () => {
     });
 
     test("PATCH proposal status should reject accepting another proposal after one is accepted", async () => {
+        await pool.query(
+            "UPDATE proposals SET status = 'pending' WHERE id = $1",
+            [thirdProposalId]
+        );
+
         const response = await request(app)
             .patch(
                 `/api/projects/${projectId}/proposals/${thirdProposalId}/status`

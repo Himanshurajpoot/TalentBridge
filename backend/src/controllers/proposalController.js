@@ -281,6 +281,22 @@ const updateProposalStatus = async (req, res) => {
     }
 
     const proposal = proposalResult.rows[0];
+    const allowedTransitions = {
+      pending: ["shortlisted", "accepted", "rejected", "withdrawn"],
+      shortlisted: ["accepted", "rejected"],
+      accepted: [],
+      rejected: [],
+      withdrawn: [],
+    };
+
+    if (!allowedTransitions[proposal.status]?.includes(status)) {
+      await client.query("ROLLBACK");
+
+      return res.status(409).json({
+        success: false,
+        message: "Invalid proposal status transition",
+      });
+    }
 
     if (status === "accepted") {
       if (project.status !== "open" && project.status !== "in_progress") {
