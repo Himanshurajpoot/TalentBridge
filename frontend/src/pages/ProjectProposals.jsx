@@ -347,13 +347,13 @@ function ProjectProposals() {
                                             : "Message"}
                                     </button>
 
-                                    {proposal.status !==
-                                        "accepted" &&
-                                        proposal.status !==
-                                            "rejected" &&
-                                        proposal.status !==
-                                            "withdrawn" && (
-                                            <>
+                                    {(proposal.status ===
+                                        "pending" ||
+                                        proposal.status ===
+                                            "shortlisted") && (
+                                        <>
+                                            {proposal.status ===
+                                                "pending" && (
                                                 <button
                                                     type="button"
                                                     onClick={() =>
@@ -373,66 +373,8 @@ function ProjectProposals() {
                                                         ? "Updating..."
                                                         : "Shortlist"}
                                                 </button>
+                                            )}
 
-                                                <button
-                                                    type="button"
-                                                    onClick={() =>
-                                                        updateStatus(
-                                                            proposal.id,
-                                                            "accepted"
-                                                        )
-                                                    }
-                                                    disabled={
-                                                        updatingId ===
-                                                        proposal.id
-                                                    }
-                                                    className="rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    {updatingId ===
-                                                    proposal.id
-                                                        ? "Updating..."
-                                                        : "Accept"}
-                                                </button>
-
-                                                <button
-                                                    type="button"
-                                                    onClick={() =>
-                                                        updateStatus(
-                                                            proposal.id,
-                                                            "rejected"
-                                                        )
-                                                    }
-                                                    disabled={
-                                                        updatingId ===
-                                                        proposal.id
-                                                    }
-                                                    className="rounded-lg border border-red-300 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    {updatingId ===
-                                                    proposal.id
-                                                        ? "Updating..."
-                                                        : "Reject"}
-                                                </button>
-                                            </>
-                                        )}
-
-                                    {proposal.status ===
-                                        "accepted" && (
-                                        <span className="rounded-lg bg-green-50 px-4 py-2.5 text-sm font-semibold text-green-700">
-                                            ✓ Proposal Accepted
-                                        </span>
-                                    )}
-
-                                    {proposal.status ===
-                                        "rejected" && (
-                                        <span className="rounded-lg bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700">
-                                            Proposal Rejected
-                                        </span>
-                                    )}
-
-                                    {proposal.status ===
-                                        "shortlisted" && (
-                                        <>
                                             <button
                                                 type="button"
                                                 onClick={() =>
@@ -473,6 +415,20 @@ function ProjectProposals() {
                                                     : "Reject"}
                                             </button>
                                         </>
+                                    )}
+
+                                    {proposal.status ===
+                                        "accepted" && (
+                                        <span className="rounded-lg bg-green-50 px-4 py-2.5 text-sm font-semibold text-green-700">
+                                            ✓ Proposal Accepted
+                                        </span>
+                                    )}
+
+                                    {proposal.status ===
+                                        "rejected" && (
+                                        <span className="rounded-lg bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700">
+                                            Proposal Rejected
+                                        </span>
                                     )}
                                 </div>
                             </div>
