@@ -172,7 +172,23 @@ const getProjects = async (req, res) => {
                 p.status,
                 p.deadline,
                 p.created_at,
-                c.name AS company_name
+                c.name AS company_name,
+                COALESCE(
+                    (
+                        SELECT JSON_AGG(
+                            JSON_BUILD_OBJECT(
+                                'id', s.id,
+                                'name', s.name
+                            )
+                            ORDER BY s.name ASC
+                        )
+                        FROM project_skills ps
+                        JOIN skills s
+                            ON s.id = ps.skill_id
+                        WHERE ps.project_id = p.id
+                    ),
+                    '[]'::json
+                ) AS skills
              FROM projects p
              LEFT JOIN companies c
                 ON c.id = p.company_id
