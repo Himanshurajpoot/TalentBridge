@@ -16,6 +16,7 @@ function Jobs() {
 
     const [filters, setFilters] = useState({
         search: "",
+        skill: "",
         employmentType: "",
         experienceLevel: "",
         isRemote: false,
@@ -35,6 +36,10 @@ function Jobs() {
 
             if (currentFilters.search.trim()) {
                 params.search = currentFilters.search.trim();
+            }
+
+            if (currentFilters.skill.trim()) {
+                params.skill = currentFilters.skill.trim();
             }
 
             if (currentFilters.employmentType) {
@@ -157,6 +162,7 @@ function Jobs() {
     const handleClear = () => {
         const clearedFilters = {
             search: "",
+            skill: "",
             employmentType: "",
             experienceLevel: "",
             isRemote: false,
@@ -271,6 +277,25 @@ function Jobs() {
                                 value={filters.search}
                                 onChange={handleChange}
                                 placeholder="Search by job title or description..."
+                                className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                            />
+                        </div>
+
+                        <div>
+                            <label
+                                htmlFor="skill"
+                                className="block text-sm font-medium text-gray-700"
+                            >
+                                Skill
+                            </label>
+
+                            <input
+                                id="skill"
+                                name="skill"
+                                type="text"
+                                value={filters.skill}
+                                onChange={handleChange}
+                                placeholder="e.g. Java, React, Python"
                                 className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                             />
                         </div>
