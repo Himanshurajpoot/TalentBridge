@@ -20,19 +20,24 @@ router.post(
     createApplication
 );
 
-// Job owner or admin authorization is handled
-// inside the controller.
 router.get(
     "/jobs/:jobId/applications",
     authenticate,
+    authorize("client", "admin"),
     getJobApplications
 );
 
-// Job owner or admin authorization is handled
-// inside the controller.
 router.patch(
     "/jobs/:jobId/applications/:applicationId",
     authenticate,
+    updateApplicationStatus
+);
+
+// Retain the status-suffixed URL while keeping application routes together.
+router.patch(
+    "/jobs/:jobId/applications/:applicationId/status",
+    authenticate,
+    authorize("client", "admin"),
     updateApplicationStatus
 );
 

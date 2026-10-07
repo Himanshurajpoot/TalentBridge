@@ -581,6 +581,35 @@ describe("Applications API", () => {
         });
     });
 
+    test("PATCH application status should retain status-suffixed URL", async () => {
+        const response = await request(app)
+            .patch(
+                `/api/jobs/${jobId}/applications/${applicationId}/status`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            )
+            .send({
+                status: "shortlisted",
+            });
+
+        expect(response.statusCode).toBe(200);
+
+        expect(response.body.success).toBe(true);
+
+        expect(response.body.message).toBe(
+            "Application status is already set to this value"
+        );
+
+        expect(
+            response.body.data.application
+        ).toMatchObject({
+            id: applicationId,
+            status: "shortlisted",
+        });
+    });
+
     test("PATCH application status should reject unauthorized freelancer", async () => {
         const response = await request(app)
             .patch(

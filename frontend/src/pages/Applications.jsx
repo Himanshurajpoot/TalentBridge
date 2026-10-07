@@ -10,7 +10,7 @@ function Applications() {
     useEffect(() => {
         const fetchApplications = async () => {
             try {
-                const response = await api.get("/jobs/applications/me");
+                const response = await api.get("/applications/me");
 
                 setApplications(response.data.data.applications);
             } catch (error) {
