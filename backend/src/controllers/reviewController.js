@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+
 const { createNotification } = require("../services/notificationService");
 
 const createReview = async (req, res) => {
@@ -52,7 +53,8 @@ const createReview = async (req, res) => {
 
             return res.status(400).json({
                 success: false,
-                message: "Reviews can only be submitted for completed projects",
+                message:
+                    "Reviews can only be submitted for completed projects",
             });
         }
 
@@ -98,12 +100,14 @@ const createReview = async (req, res) => {
 
             return res.status(403).json({
                 success: false,
-                message: "You are not allowed to review participants of this project",
+                message:
+                    "You are not allowed to review participants of this project",
             });
         }
 
         if (
-            (isClient && Number(revieweeId) !== Number(freelancerId)) ||
+            (isClient &&
+                Number(revieweeId) !== Number(freelancerId)) ||
             (isAcceptedFreelancer &&
                 Number(revieweeId) !== Number(project.client_id))
         ) {
@@ -129,7 +133,8 @@ const createReview = async (req, res) => {
 
             return res.status(409).json({
                 success: false,
-                message: "You have already reviewed this user for this project",
+                message:
+                    "You have already reviewed this user for this project",
             });
         }
 
@@ -208,10 +213,14 @@ const getProjectReviews = async (req, res) => {
                 r.comment,
                 r.created_at,
                 u.full_name AS reviewer_name
+
              FROM reviews r
+
              JOIN users u
                 ON u.id = r.reviewer_id
+
              WHERE r.project_id = $1
+
              ORDER BY r.created_at DESC`,
             [projectId]
         );
@@ -247,12 +256,17 @@ const getUserReviews = async (req, res) => {
                 r.created_at,
                 u.full_name AS reviewer_name,
                 p.title AS project_title
+
              FROM reviews r
+
              JOIN users u
                 ON u.id = r.reviewer_id
+
              JOIN projects p
                 ON p.id = r.project_id
+
              WHERE r.reviewee_id = $1
+
              ORDER BY r.created_at DESC`,
             [userId]
         );
@@ -273,8 +287,50 @@ const getUserReviews = async (req, res) => {
     }
 };
 
+const getUserRating = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!Number.isInteger(Number(userId)) || Number(userId) <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid user ID",
+            });
+        }
+
+        const result = await pool.query(
+            `SELECT
+                COALESCE(ROUND(AVG(rating)::numeric, 2), 0) AS average_rating,
+                COUNT(*) AS review_count
+             FROM reviews
+             WHERE reviewee_id = $1`,
+            [userId]
+        );
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                averageRating: Number(
+                    result.rows[0].average_rating
+                ),
+                reviewCount: Number(
+                    result.rows[0].review_count
+                ),
+            },
+        });
+    } catch (error) {
+        console.error("Get user rating error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error",
+        });
+    }
+};
+
 module.exports = {
     createReview,
     getProjectReviews,
     getUserReviews,
+    getUserRating,
 };

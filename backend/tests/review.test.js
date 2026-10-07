@@ -14,6 +14,8 @@ describe("Reviews API", () => {
 
     let clientReviewId;
     let freelancerReviewId;
+    let ratingTestProjectId;
+    let ratingTestReviewIds = [];
 
     beforeAll(async () => {
         const clientLogin = await request(app)
@@ -157,6 +159,20 @@ describe("Reviews API", () => {
     });
 
     afterAll(async () => {
+        if (ratingTestReviewIds.length > 0) {
+            await pool.query(
+                "DELETE FROM reviews WHERE id = ANY($1::bigint[])",
+                [ratingTestReviewIds]
+            );
+        }
+
+        if (ratingTestProjectId) {
+            await pool.query(
+                "DELETE FROM projects WHERE id = $1",
+                [ratingTestProjectId]
+            );
+        }
+
         if (clientReviewId) {
             await pool.query(
                 "DELETE FROM reviews WHERE id = $1",
@@ -668,6 +684,147 @@ describe("Reviews API", () => {
                 "Himanshu Test",
             project_title:
                 "Automated Review Test Project",
+        });
+    });
+
+    test("GET user rating should return average rating and review count", async () => {
+        const userResult = await pool.query(
+            `SELECT u.id
+             FROM users u
+             WHERE u.id NOT IN (2, 3)
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM reviews r
+                   WHERE r.reviewee_id = u.id
+               )
+             ORDER BY u.id
+             LIMIT 1`
+        );
+        expect(userResult.rows.length).toBeGreaterThan(0);
+
+        const revieweeId = userResult.rows[0].id;
+        const projectResponse = await request(app)
+            .post("/api/projects")
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            )
+            .send({
+                companyId,
+                title: "Automated Rating Test Project",
+                description:
+                    "Temporary project for deterministic rating tests.",
+            });
+
+        ratingTestProjectId =
+            projectResponse.body.data?.project?.id;
+        expect(projectResponse.statusCode).toBe(201);
+
+        const reviewResult = await pool.query(
+            `INSERT INTO reviews (
+                reviewer_id,
+                reviewee_id,
+                project_id,
+                rating
+             )
+             VALUES
+                (3, $1, $2, 4),
+                (2, $1, $2, 4),
+                (3, $1, $3, 5)
+             RETURNING id`,
+            [revieweeId, projectId, ratingTestProjectId]
+        );
+        ratingTestReviewIds = reviewResult.rows.map(
+            (row) => row.id
+        );
+
+        const response = await request(app)
+            .get(`/api/users/${revieweeId}/rating`)
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            );
+
+        expect(response.statusCode).toBe(200);
+
+        expect(response.body.success).toBe(true);
+
+        expect(response.body.data).toEqual({
+            averageRating: 4.33,
+            reviewCount: 3,
+        });
+
+        await pool.query(
+            "DELETE FROM reviews WHERE id = ANY($1::bigint[])",
+            [ratingTestReviewIds]
+        );
+        ratingTestReviewIds = [];
+
+        await pool.query(
+            "DELETE FROM projects WHERE id = $1",
+            [ratingTestProjectId]
+        );
+        ratingTestProjectId = null;
+    });
+
+    test("GET user rating should return zero for a user with no reviews", async () => {
+        const result = await pool.query(
+            `SELECT id
+             FROM users
+             WHERE id NOT IN (
+                 SELECT DISTINCT reviewee_id
+                 FROM reviews
+             )
+             ORDER BY id
+             LIMIT 1`
+        );
+
+        expect(result.rows.length).toBeGreaterThan(0);
+
+        const userId = result.rows[0].id;
+
+        const response = await request(app)
+            .get(`/api/users/${userId}/rating`)
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            );
+
+        expect(response.statusCode).toBe(200);
+
+        expect(response.body.success).toBe(true);
+
+        expect(response.body.data).toEqual({
+            averageRating: 0,
+            reviewCount: 0,
+        });
+    });
+
+    test("GET user rating should reject invalid user ID", async () => {
+        const response = await request(app)
+            .get("/api/users/invalid/rating")
+            .set(
+                "Authorization",
+                `Bearer ${freelancerToken}`
+            );
+
+        expect(response.statusCode).toBe(400);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Invalid user ID",
+        });
+    });
+
+    test("GET user rating should require authentication", async () => {
+        const response = await request(app)
+            .get("/api/users/2/rating");
+
+        expect(response.statusCode).toBe(401);
+
+        expect(response.body).toEqual({
+            success: false,
+            message: "Authentication required",
         });
     });
 });

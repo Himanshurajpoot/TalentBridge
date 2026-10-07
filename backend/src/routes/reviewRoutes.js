@@ -4,6 +4,7 @@ const {
     createReview,
     getProjectReviews,
     getUserReviews,
+    getUserRating,
 } = require("../controllers/reviewController");
 
 const authenticate = require("../middleware/authMiddleware");
@@ -26,6 +27,12 @@ router.get(
     "/users/:userId/reviews",
     authenticate,
     getUserReviews
+);
+
+router.get(
+    "/users/:userId/rating",
+    authenticate,
+    getUserRating
 );
 
 module.exports = router;
