@@ -63,6 +63,44 @@ function getStatusClasses(status) {
     }
 }
 
+function loadRazorpayCheckout() {
+    if (window.Razorpay) {
+        return Promise.resolve(true);
+    }
+
+    const existingScript = document.querySelector(
+        'script[src*="checkout.razorpay.com/v1/checkout.js"]'
+    );
+
+    if (existingScript) {
+        return new Promise((resolve) => {
+            existingScript.addEventListener(
+                "load",
+                () => resolve(Boolean(window.Razorpay)),
+                { once: true }
+            );
+            existingScript.addEventListener(
+                "error",
+                () => resolve(false),
+                { once: true }
+            );
+        });
+    }
+
+    return new Promise((resolve) => {
+        const script = document.createElement("script");
+        script.src = "https://checkout.razorpay.com/v1/checkout.js";
+        script.async = true;
+        script.dataset.razorpayCheckout = "true";
+        script.onload = () => resolve(Boolean(window.Razorpay));
+        script.onerror = () => {
+            script.remove();
+            resolve(false);
+        };
+        document.body.appendChild(script);
+    });
+}
+
 function ContractDetails() {
     const { contractId } = useParams();
     const { user } = useAuth();
@@ -71,6 +109,11 @@ function ContractDetails() {
     const [completing, setCompleting] = useState(false);
     const [completionError, setCompletionError] = useState("");
     const [completionSuccess, setCompletionSuccess] = useState("");
+    const [creatingPaymentOrder, setCreatingPaymentOrder] =
+        useState(false);
+    const [checkoutOpen, setCheckoutOpen] = useState(false);
+    const [paymentError, setPaymentError] = useState("");
+    const [paymentMessage, setPaymentMessage] = useState("");
     const [errorStatus, setErrorStatus] = useState(null);
     const [error, setError] = useState("");
 
@@ -79,6 +122,11 @@ function ContractDetails() {
         user?.role !== "admin" &&
         (Number(contract?.client_id) === Number(user?.id) ||
             Number(contract?.freelancer_id) === Number(user?.id));
+
+    const canInitiatePayment =
+        contract?.status === "active" &&
+        user?.role === "client" &&
+        Number(contract?.client_id) === Number(user?.id);
 
     useEffect(() => {
         let mounted = true;
@@ -178,6 +226,136 @@ function ContractDetails() {
             }
         } finally {
             setCompleting(false);
+        }
+    };
+
+    const handlePay = async () => {
+        if (creatingPaymentOrder || checkoutOpen) {
+            return;
+        }
+
+        try {
+            setCreatingPaymentOrder(true);
+            setPaymentError("");
+            setPaymentMessage("");
+
+            const idempotencyKey = window.crypto.randomUUID
+                ? window.crypto.randomUUID()
+                : Array.from(
+                      window.crypto.getRandomValues(new Uint8Array(16)),
+                      (byte) => byte.toString(16).padStart(2, "0")
+                  ).join("");
+
+            const response = await api.post(
+                `/contracts/${contractId}/payment-orders`,
+                {},
+                {
+                    headers: {
+                        "Idempotency-Key": idempotencyKey,
+                    },
+                }
+            );
+
+            const {
+                razorpayOrderId,
+                amount,
+                currency,
+                keyId,
+            } = response.data.data;
+
+            const checkoutLoaded = await loadRazorpayCheckout();
+
+            if (!checkoutLoaded) {
+                setPaymentError(
+                    "Unable to load secure payment checkout. Please try again."
+                );
+                return;
+            }
+
+            let checkoutSucceeded = false;
+            const checkout = new window.Razorpay({
+                key: keyId,
+                amount,
+                currency,
+                order_id: razorpayOrderId,
+                name: "TalentBridge",
+                description: contract.project?.title || "Contract payment",
+                handler: async (checkoutResponse) => {
+                    checkoutSucceeded = true;
+                    setCheckoutOpen(false);
+
+                    try {
+                        const verificationResponse = await api.post(
+                            "/contracts/payment-verifications/razorpay",
+                            {
+                                razorpay_order_id:
+                                    checkoutResponse.razorpay_order_id,
+                                razorpay_payment_id:
+                                    checkoutResponse.razorpay_payment_id,
+                                razorpay_signature:
+                                    checkoutResponse.razorpay_signature,
+                            }
+                        );
+
+                        setPaymentMessage(
+                            verificationResponse.data.message
+                        );
+                    } catch (verificationError) {
+                        console.error(
+                            "Failed to verify payment signature:",
+                            verificationError
+                        );
+
+                        setPaymentError(
+                            verificationError.response?.status === 409
+                                ? "This payment has already been associated with another transaction."
+                                : "Payment could not be verified. No payment status has been confirmed."
+                        );
+                    }
+                },
+                modal: {
+                    ondismiss: () => {
+                        setCheckoutOpen(false);
+                        if (!checkoutSucceeded) {
+                            setPaymentMessage(
+                                "Payment checkout was closed. No payment status has been confirmed."
+                            );
+                        }
+                    },
+                },
+            });
+
+            checkout.on("payment.failed", () => {
+                setPaymentError(
+                    "The payment attempt was not completed. Payment status has not been changed."
+                );
+            });
+            setCheckoutOpen(true);
+            checkout.open();
+        } catch (requestError) {
+            setCheckoutOpen(false);
+            console.error(
+                "Failed to start contract payment:",
+                requestError
+            );
+
+            const status = requestError.response?.status;
+            setPaymentError(
+                status === 401
+                    ? "Please sign in again to make this payment."
+                    : status === 403
+                    ? "Only the client on this contract can initiate payment."
+                    : status === 404
+                    ? "This contract could not be found."
+                    : status === 409
+                    ? requestError.response?.data?.message ||
+                      "A payment order already exists or this contract is not eligible."
+                    : status === 503
+                    ? "Payment checkout is not configured right now."
+                    : "Unable to start payment. Please try again."
+            );
+        } finally {
+            setCreatingPaymentOrder(false);
         }
     };
 
@@ -283,6 +461,18 @@ function ContractDetails() {
                     </div>
                 )}
 
+                {paymentError && (
+                    <div className="mt-5 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                        {paymentError}
+                    </div>
+                )}
+
+                {paymentMessage && (
+                    <div className="mt-5 rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
+                        {paymentMessage}
+                    </div>
+                )}
+
                 <section className="mt-6">
                     <h2 className="text-lg font-semibold text-gray-900">
                         Project Details
@@ -359,18 +549,39 @@ function ContractDetails() {
                     </p>
                 </section>
 
-                {canCompleteContract && (
+                {(canCompleteContract || canInitiatePayment) && (
                     <div className="mt-8 border-t pt-6">
-                        <button
-                            type="button"
-                            onClick={handleCompleteContract}
-                            disabled={completing}
-                            className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            {completing
-                                ? "Completing..."
-                                : "Complete Contract"}
-                        </button>
+                        <div className="flex flex-wrap gap-3">
+                            {canInitiatePayment && (
+                                <button
+                                    type="button"
+                                    onClick={handlePay}
+                                    disabled={
+                                        creatingPaymentOrder || checkoutOpen
+                                    }
+                                    className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {creatingPaymentOrder
+                                        ? "Preparing Checkout..."
+                                        : checkoutOpen
+                                        ? "Checkout Open"
+                                        : "Pay"}
+                                </button>
+                            )}
+
+                            {canCompleteContract && (
+                                <button
+                                    type="button"
+                                    onClick={handleCompleteContract}
+                                    disabled={completing}
+                                    className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {completing
+                                        ? "Completing..."
+                                        : "Complete Contract"}
+                                </button>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>

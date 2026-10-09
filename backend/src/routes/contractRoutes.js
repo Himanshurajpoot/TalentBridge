@@ -5,11 +5,22 @@ const {
     getContractById,
     completeContract,
 } = require("../controllers/contractController");
+const {
+    createContractPaymentOrder,
+    verifyContractPayment,
+} = require("../controllers/paymentController");
 
 const authenticate = require("../middleware/authMiddleware");
 const authorize = require("../middleware/authorize");
 
 const router = express.Router();
+
+router.post(
+    "/payment-verifications/razorpay",
+    authenticate,
+    authorize("client"),
+    verifyContractPayment
+);
 
 router.get(
     "/me",
@@ -30,6 +41,13 @@ router.patch(
     authenticate,
     authorize("client", "freelancer"),
     completeContract
+);
+
+router.post(
+    "/:contractId/payment-orders",
+    authenticate,
+    authorize("client"),
+    createContractPaymentOrder
 );
 
 module.exports = router;
