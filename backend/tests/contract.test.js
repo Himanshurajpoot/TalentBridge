@@ -187,6 +187,12 @@ describe("Contract completion API", () => {
             new Date(contractResult.rows[0].updated_at).getTime()
         ).toBeGreaterThan(Date.now() - 60000);
 
+        const projectResult = await pool.query(
+            "SELECT status FROM projects WHERE id = $1",
+            [projectId]
+        );
+        expect(projectResult.rows[0].status).toBe("completed");
+
         const notificationResult = await pool.query(
             `SELECT user_id, type, reference_type, reference_id
              FROM notifications
@@ -334,27 +340,27 @@ describe("Contract completion API", () => {
         );
     });
 
-    test("a database failure rolls back completion and does not notify", async () => {
+    test("a project update failure rolls back completion and does not notify", async () => {
         await createContract();
 
         await pool.query(
-            `CREATE OR REPLACE FUNCTION contract_completion_failure_test()
+            `CREATE OR REPLACE FUNCTION project_completion_failure_test()
              RETURNS trigger
              LANGUAGE plpgsql
              AS $$
              BEGIN
                  IF NEW.status = 'completed' THEN
-                     RAISE EXCEPTION 'Forced contract completion failure';
+                     RAISE EXCEPTION 'Forced project completion failure';
                  END IF;
                  RETURN NEW;
              END;
              $$`
         );
         await pool.query(
-            `CREATE TRIGGER contract_completion_failure_test
-             AFTER UPDATE ON contracts
+            `CREATE TRIGGER project_completion_failure_test
+             AFTER UPDATE ON projects
              FOR EACH ROW
-             EXECUTE FUNCTION contract_completion_failure_test()`
+             EXECUTE FUNCTION project_completion_failure_test()`
         );
         const errorSpy = jest
             .spyOn(console, "error")
@@ -376,6 +382,12 @@ describe("Contract completion API", () => {
             );
             expect(contractResult.rows[0].status).toBe("active");
 
+            const projectResult = await pool.query(
+                "SELECT status FROM projects WHERE id = $1",
+                [projectId]
+            );
+            expect(projectResult.rows[0].status).toBe("in_progress");
+
             const notificationResult = await pool.query(
                 `SELECT id
                  FROM notifications
@@ -386,10 +398,10 @@ describe("Contract completion API", () => {
             expect(notificationResult.rowCount).toBe(0);
         } finally {
             await pool.query(
-                "DROP TRIGGER IF EXISTS contract_completion_failure_test ON contracts"
+                "DROP TRIGGER IF EXISTS project_completion_failure_test ON projects"
             );
             await pool.query(
-                "DROP FUNCTION IF EXISTS contract_completion_failure_test()"
+                "DROP FUNCTION IF EXISTS project_completion_failure_test()"
             );
             errorSpy.mockRestore();
         }
@@ -422,6 +434,12 @@ describe("Contract completion API", () => {
             [contractId]
         );
         expect(contractResult.rows[0].status).toBe("completed");
+
+        const projectResult = await pool.query(
+            "SELECT status FROM projects WHERE id = $1",
+            [projectId]
+        );
+        expect(projectResult.rows[0].status).toBe("completed");
 
         const notificationResult = await pool.query(
             `SELECT id

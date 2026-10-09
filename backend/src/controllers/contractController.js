@@ -197,6 +197,19 @@ const completeContract = async (req, res) => {
             [contractId],
         );
 
+        const projectResult = await client.query(
+            `UPDATE projects
+             SET status = 'completed',
+                 updated_at = NOW()
+             WHERE id = $1
+             RETURNING id, status`,
+            [contract.project_id],
+        );
+
+        if (projectResult.rowCount === 0) {
+            throw new Error("Contract project not found during completion");
+        }
+
         await client.query("COMMIT");
         transactionCommitted = true;
 
