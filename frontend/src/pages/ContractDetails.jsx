@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import api from "../services/api";
+import { useAuth } from "../context/useAuth";
 
 function formatCurrency(value) {
     if (value === null || value === undefined) {
@@ -64,10 +65,20 @@ function getStatusClasses(status) {
 
 function ContractDetails() {
     const { contractId } = useParams();
+    const { user } = useAuth();
     const [contract, setContract] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [completing, setCompleting] = useState(false);
+    const [completionError, setCompletionError] = useState("");
+    const [completionSuccess, setCompletionSuccess] = useState("");
     const [errorStatus, setErrorStatus] = useState(null);
     const [error, setError] = useState("");
+
+    const canCompleteContract =
+        contract?.status === "active" &&
+        user?.role !== "admin" &&
+        (Number(contract?.client_id) === Number(user?.id) ||
+            Number(contract?.freelancer_id) === Number(user?.id));
 
     useEffect(() => {
         let mounted = true;
@@ -111,6 +122,64 @@ function ContractDetails() {
             mounted = false;
         };
     }, [contractId]);
+
+    const handleCompleteContract = async () => {
+        if (completing) {
+            return;
+        }
+
+        const confirmed = window.confirm(
+            "Are you sure you want to mark this contract as completed?"
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            setCompleting(true);
+            setCompletionError("");
+            setCompletionSuccess("");
+
+            const response = await api.patch(
+                `/contracts/${contractId}/complete`
+            );
+
+            setContract((currentContract) => ({
+                ...currentContract,
+                ...response.data.data.contract,
+            }));
+            setCompletionSuccess(
+                "Contract completed successfully."
+            );
+        } catch (requestError) {
+            console.error(
+                "Failed to complete contract:",
+                requestError
+            );
+
+            const status = requestError.response?.status;
+            const message =
+                status === 401
+                    ? "Please sign in again to complete this contract."
+                    : status === 403
+                    ? "You do not have permission to complete this contract."
+                    : status === 404
+                    ? "This contract could not be found."
+                    : status === 409
+                    ? "This contract is no longer active or has already been completed."
+                    : "Failed to complete the contract. Please try again.";
+
+            setCompletionError(message);
+
+            if (status === 404) {
+                setErrorStatus(404);
+                setContract(null);
+            }
+        } finally {
+            setCompleting(false);
+        }
+    };
 
     if (loading) {
         return (
@@ -202,6 +271,18 @@ function ContractDetails() {
                     </span>
                 </div>
 
+                {completionSuccess && (
+                    <div className="mt-5 rounded-lg bg-green-50 p-3 text-sm font-medium text-green-700">
+                        {completionSuccess}
+                    </div>
+                )}
+
+                {completionError && (
+                    <div className="mt-5 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                        {completionError}
+                    </div>
+                )}
+
                 <section className="mt-6">
                     <h2 className="text-lg font-semibold text-gray-900">
                         Project Details
@@ -277,6 +358,21 @@ function ContractDetails() {
                         {contract.terms || "No terms provided."}
                     </p>
                 </section>
+
+                {canCompleteContract && (
+                    <div className="mt-8 border-t pt-6">
+                        <button
+                            type="button"
+                            onClick={handleCompleteContract}
+                            disabled={completing}
+                            className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {completing
+                                ? "Completing..."
+                                : "Complete Contract"}
+                        </button>
+                    </div>
+                )}
             </div>
         </main>
     );
