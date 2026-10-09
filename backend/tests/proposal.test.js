@@ -13,6 +13,10 @@ describe("Proposals API", () => {
     let proposalId;
     let secondProposalId;
     let thirdProposalId;
+    let contractId;
+
+    const authorizationHeader = (token) =>
+        ["Bearer", token].join(" ");
 
     beforeAll(async () => {
         const clientLogin = await request(app)
@@ -132,6 +136,13 @@ describe("Proposals API", () => {
     });
 
     afterAll(async () => {
+        if (proposalId) {
+            await pool.query(
+                "DELETE FROM contracts WHERE proposal_id = $1",
+                [proposalId]
+            );
+        }
+
         if (proposalId) {
             await pool.query(
                 "DELETE FROM proposals WHERE id = $1",
@@ -722,6 +733,286 @@ describe("Proposals API", () => {
             id: projectId,
             status: "in_progress",
         });
+
+        const contractResult = await pool.query(
+            `SELECT
+                id,
+                proposal_id,
+                project_id,
+                client_id,
+                freelancer_id,
+                agreed_amount,
+                status
+             FROM contracts
+             WHERE proposal_id = $1`,
+            [proposalId]
+        );
+
+        expect(contractResult.rowCount).toBe(1);
+        contractId = contractResult.rows[0].id;
+        expect(contractResult.rows[0]).toMatchObject({
+            proposal_id: proposalId,
+            project_id: projectId,
+            client_id: expect.any(Number),
+            freelancer_id: 2,
+            agreed_amount: "60000.00",
+            status: "active",
+        });
+
+        const projectResult = await pool.query(
+            "SELECT client_id FROM projects WHERE id = $1",
+            [projectId]
+        );
+        expect(contractResult.rows[0].client_id).toBe(
+            projectResult.rows[0].client_id
+        );
+    });
+
+    test("GET /api/contracts/me should return contracts for either participant", async () => {
+        const clientResponse = await request(app)
+            .get("/api/contracts/me")
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(clientResponse.statusCode).toBe(200);
+        expect(clientResponse.body.data.contracts).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: contractId,
+                    project: expect.objectContaining({
+                        id: projectId,
+                        title: "Automated Proposal Test Project",
+                    }),
+                }),
+            ])
+        );
+
+        const freelancerResponse = await request(app)
+            .get("/api/contracts/me")
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            );
+
+        expect(freelancerResponse.statusCode).toBe(200);
+        expect(freelancerResponse.body.data.contracts).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: contractId,
+                    freelancer: expect.objectContaining({
+                        id: 2,
+                        name: "Himanshu Test",
+                    }),
+                }),
+            ])
+        );
+    });
+
+    test("GET /api/contracts/:contractId should restrict access to contract participants", async () => {
+        const clientResponse = await request(app)
+            .get(`/api/contracts/${contractId}`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(clientResponse.statusCode).toBe(200);
+        expect(clientResponse.body.data.contract).toMatchObject({
+            id: contractId,
+            agreed_amount: "60000.00",
+            project: {
+                id: projectId,
+                title: "Automated Proposal Test Project",
+            },
+            client: {
+                id: expect.any(Number),
+                name: expect.any(String),
+            },
+            freelancer: {
+                id: 2,
+                name: "Himanshu Test",
+            },
+        });
+
+        const freelancerResponse = await request(app)
+            .get(`/api/contracts/${contractId}`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            );
+
+        expect(freelancerResponse.statusCode).toBe(200);
+
+        const unauthorizedResponse = await request(app)
+            .get(`/api/contracts/${contractId}`)
+            .set(
+                "Authorization",
+                authorizationHeader(secondFreelancerToken)
+            );
+
+        expect(unauthorizedResponse.statusCode).toBe(403);
+    });
+
+    test("GET /api/contracts/:contractId should return 404 for a missing contract", async () => {
+        const response = await request(app)
+            .get("/api/contracts/9223372036854775807")
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(404);
+        expect(response.body).toEqual({
+            success: false,
+            message: "Contract not found",
+        });
+    });
+
+    test("repeated proposal acceptance should not create a duplicate contract", async () => {
+        const response = await request(app)
+            .patch(
+                `/api/projects/${projectId}/proposals/${proposalId}/status`
+            )
+            .set("Authorization", authorizationHeader(clientToken))
+            .send({
+                status: "accepted",
+            });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body).toEqual({
+            success: false,
+            message: "Invalid proposal status transition",
+        });
+
+        const contractResult = await pool.query(
+            "SELECT COUNT(*) FROM contracts WHERE proposal_id = $1",
+            [proposalId]
+        );
+        expect(Number(contractResult.rows[0].count)).toBe(1);
+    });
+
+    test("contract creation failure should roll back proposal acceptance and project update", async () => {
+        let isolatedProjectId;
+        let isolatedProposalId;
+        let seededContractId;
+
+        try {
+            const isolatedProjectResponse = await request(app)
+                .post("/api/projects")
+                .set(
+                    "Authorization",
+                    authorizationHeader(clientToken)
+                )
+                .send({
+                    companyId,
+                    title: "Contract Rollback Test Project",
+                    description: "Initial contract terms.",
+                    budgetMin: 50000,
+                    budgetMax: 90000,
+                    experienceLevel: "mid",
+                    deadline: "2027-12-31T23:59:59.000Z",
+                });
+
+            expect(isolatedProjectResponse.statusCode).toBe(201);
+            isolatedProjectId =
+                isolatedProjectResponse.body.data.project.id;
+
+            const isolatedProposalResponse = await request(app)
+                .post(
+                    `/api/projects/${isolatedProjectId}/proposals`
+                )
+                .set(
+                    "Authorization",
+                    authorizationHeader(freelancerToken)
+                )
+                .send({
+                    coverLetter: "Proposal for rollback testing.",
+                    proposedBudget: 62000,
+                    estimatedDays: 18,
+                });
+
+            expect(isolatedProposalResponse.statusCode).toBe(201);
+            isolatedProposalId =
+                isolatedProposalResponse.body.data.proposal.id;
+
+            const projectResult = await pool.query(
+                "SELECT client_id FROM projects WHERE id = $1",
+                [isolatedProjectId]
+            );
+
+            const existingContract = await pool.query(
+                `INSERT INTO contracts
+                    (
+                        proposal_id,
+                        project_id,
+                        client_id,
+                        freelancer_id,
+                        agreed_amount,
+                        terms
+                    )
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 RETURNING id`,
+                [
+                    isolatedProposalId,
+                    isolatedProjectId,
+                    projectResult.rows[0].client_id,
+                    2,
+                    62000,
+                    "Initial contract terms.",
+                ]
+            );
+            seededContractId = existingContract.rows[0].id;
+
+            const acceptanceResponse = await request(app)
+                .patch(
+                    `/api/projects/${isolatedProjectId}/proposals/${isolatedProposalId}/status`
+                )
+                .set(
+                    "Authorization",
+                    authorizationHeader(clientToken)
+                )
+                .send({
+                    status: "accepted",
+                });
+
+            expect(acceptanceResponse.statusCode).toBe(409);
+            expect(acceptanceResponse.body).toEqual({
+                success: false,
+                message: "A contract already exists for this proposal",
+            });
+
+            const proposalResult = await pool.query(
+                "SELECT status FROM proposals WHERE id = $1",
+                [isolatedProposalId]
+            );
+            expect(proposalResult.rows[0].status).toBe("pending");
+
+            const projectStatusResult = await pool.query(
+                "SELECT status FROM projects WHERE id = $1",
+                [isolatedProjectId]
+            );
+            expect(projectStatusResult.rows[0].status).toBe("open");
+
+            const contractResult = await pool.query(
+                "SELECT COUNT(*) FROM contracts WHERE proposal_id = $1",
+                [isolatedProposalId]
+            );
+            expect(Number(contractResult.rows[0].count)).toBe(1);
+        } finally {
+            if (seededContractId) {
+                await pool.query(
+                    "DELETE FROM contracts WHERE id = $1",
+                    [seededContractId]
+                );
+            }
+
+            if (isolatedProposalId) {
+                await pool.query(
+                    "DELETE FROM proposals WHERE id = $1",
+                    [isolatedProposalId]
+                );
+            }
+
+            if (isolatedProjectId) {
+                await pool.query(
+                    "DELETE FROM projects WHERE id = $1",
+                    [isolatedProjectId]
+                );
+            }
+        }
     });
 
     test("PATCH proposal status should reject accepting another proposal after one is accepted", async () => {

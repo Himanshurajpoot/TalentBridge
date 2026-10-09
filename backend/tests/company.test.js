@@ -1,3 +1,4 @@
+const { randomUUID } = require("crypto");
 const request = require("supertest");
 const app = require("../src/app");
 const pool = require("../src/config/db");
@@ -6,17 +7,21 @@ describe("Company API", () => {
     let clientToken;
     let freelancerToken;
     let adminToken;
+    let testClientId;
 
     beforeAll(async () => {
-        const clientLogin = await request(app)
-            .post("/api/auth/login")
+        const clientRegistration = await request(app)
+            .post("/api/auth/register")
             .send({
-                email: "client.test@example.com",
+                fullName: "TalentBridge Company Test Client",
+                email: `company-test-${randomUUID()}@example.com`,
                 password: "ClientPassword123",
+                role: "client",
             });
 
-        expect(clientLogin.statusCode).toBe(200);
-        clientToken = clientLogin.body.data.token;
+        expect(clientRegistration.statusCode).toBe(201);
+        clientToken = clientRegistration.body.data.token;
+        testClientId = clientRegistration.body.data.user.id;
 
         const freelancerLogin = await request(app)
             .post("/api/auth/login")
@@ -50,12 +55,29 @@ describe("Company API", () => {
 
     beforeEach(async () => {
         await pool.query(
-            `
-            DELETE FROM companies
-            WHERE name LIKE 'TalentBridge Company Test%'
-               OR name IN ('Older Company', 'Newer Company', 'Company One', 'Company Two')
-            `
+            "DELETE FROM companies WHERE owner_id = $1",
+            [testClientId]
         );
+    });
+
+    afterEach(async () => {
+        await pool.query(
+            "DELETE FROM companies WHERE owner_id = $1",
+            [testClientId]
+        );
+    });
+
+    afterAll(async () => {
+        if (testClientId) {
+            await pool.query(
+                "DELETE FROM companies WHERE owner_id = $1",
+                [testClientId]
+            );
+            await pool.query(
+                "DELETE FROM users WHERE id = $1",
+                [testClientId]
+            );
+        }
     });
 
     describe("POST /api/companies", () => {

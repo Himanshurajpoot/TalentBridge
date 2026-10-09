@@ -189,6 +189,11 @@ describe("Reviews API", () => {
 
         if (proposalId) {
             await pool.query(
+                "DELETE FROM contracts WHERE proposal_id = $1",
+                [proposalId]
+            );
+
+            await pool.query(
                 "DELETE FROM proposals WHERE id = $1",
                 [proposalId]
             );

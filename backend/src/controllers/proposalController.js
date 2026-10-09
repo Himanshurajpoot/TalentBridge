@@ -228,7 +228,8 @@ const updateProposalStatus = async (req, res) => {
                 id,
                 client_id,
                 status,
-                title
+                title,
+                description
              FROM projects
              WHERE id = $1
              FOR UPDATE`,
@@ -263,7 +264,8 @@ const updateProposalStatus = async (req, res) => {
                 id,
                 project_id,
                 freelancer_id,
-                status
+                status,
+                proposed_budget
              FROM proposals
              WHERE id = $1
                AND project_id = $2
@@ -347,6 +349,38 @@ const updateProposalStatus = async (req, res) => {
                    AND status IN ('pending', 'shortlisted')`,
         [projectId, proposalId],
       );
+
+      const contractResult = await client.query(
+        `INSERT INTO contracts
+                 (
+                     proposal_id,
+                     project_id,
+                     client_id,
+                     freelancer_id,
+                     agreed_amount,
+                     terms
+                 )
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (proposal_id) DO NOTHING
+             RETURNING id`,
+        [
+          proposalId,
+          projectId,
+          project.client_id,
+          proposal.freelancer_id,
+          proposal.proposed_budget,
+          project.description,
+        ],
+      );
+
+      if (contractResult.rowCount === 0) {
+        await client.query("ROLLBACK");
+
+        return res.status(409).json({
+          success: false,
+          message: "A contract already exists for this proposal",
+        });
+      }
 
       await client.query(
         `UPDATE projects

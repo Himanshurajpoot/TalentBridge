@@ -10,6 +10,7 @@ const profileRoutes = require("./routes/profileRoutes");
 const skillRoutes = require("./routes/skillRoutes");
 const projectRoutes = require("./routes/projectRoutes");
 const proposalRoutes = require("./routes/proposalRoutes");
+const contractRoutes = require("./routes/contractRoutes");
 const applicationRoutes = require("./routes/applicationRoutes");
 const conversationRoutes = require("./routes/conversationRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
@@ -87,6 +88,7 @@ app.use("/api/profile", profileRoutes);
 app.use("/api/skills", skillRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api", proposalRoutes);
+app.use("/api/contracts", contractRoutes);
 app.use("/api", applicationRoutes);
 app.use(
     "/api/conversations",
