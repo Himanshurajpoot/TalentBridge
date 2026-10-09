@@ -1,0 +1,435 @@
+const jwt = require("jsonwebtoken");
+const request = require("supertest");
+
+const app = require("../src/app");
+const pool = require("../src/config/db");
+
+describe("Contract completion API", () => {
+    let clientToken;
+    let freelancerToken;
+    let secondFreelancerToken;
+    let adminToken;
+    let clientId;
+    let freelancerId;
+    let secondFreelancerId;
+    let contractId;
+    let proposalId;
+    let projectId;
+
+    const authorizationHeader = (token) =>
+        ["Bearer", token].join(" ");
+
+    const createContract = async (status = "active") => {
+        const projectResult = await pool.query(
+            `INSERT INTO projects
+                (client_id, title, description, status)
+             VALUES ($1, $2, $3, 'in_progress')
+             RETURNING id`,
+            [
+                clientId,
+                "Contract Completion Test Project",
+                "Contract completion test terms.",
+            ]
+        );
+        projectId = projectResult.rows[0].id;
+
+        const proposalResult = await pool.query(
+            `INSERT INTO proposals
+                (
+                    project_id,
+                    freelancer_id,
+                    cover_letter,
+                    proposed_budget,
+                    estimated_days,
+                    status
+                )
+             VALUES ($1, $2, $3, $4, $5, 'accepted')
+             RETURNING id`,
+            [
+                projectId,
+                freelancerId,
+                "Proposal for contract completion testing.",
+                55000,
+                20,
+            ]
+        );
+        proposalId = proposalResult.rows[0].id;
+
+        const contractResult = await pool.query(
+            `INSERT INTO contracts
+                (
+                    proposal_id,
+                    project_id,
+                    client_id,
+                    freelancer_id,
+                    agreed_amount,
+                    terms,
+                    status,
+                    updated_at
+                )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() - INTERVAL '1 day')
+             RETURNING id`,
+            [
+                proposalId,
+                projectId,
+                clientId,
+                freelancerId,
+                55000,
+                "Contract completion test terms.",
+                status,
+            ]
+        );
+        contractId = contractResult.rows[0].id;
+    };
+
+    const cleanupContract = async () => {
+        if (contractId) {
+            await pool.query(
+                `DELETE FROM notifications
+                 WHERE reference_type = 'contract'
+                   AND reference_id = $1`,
+                [contractId]
+            );
+            await pool.query(
+                "DELETE FROM contracts WHERE id = $1",
+                [contractId]
+            );
+        }
+
+        if (proposalId) {
+            await pool.query(
+                "DELETE FROM proposals WHERE id = $1",
+                [proposalId]
+            );
+        }
+
+        if (projectId) {
+            await pool.query(
+                "DELETE FROM projects WHERE id = $1",
+                [projectId]
+            );
+        }
+
+        contractId = null;
+        proposalId = null;
+        projectId = null;
+    };
+
+    beforeAll(async () => {
+        const clientLogin = await request(app)
+            .post("/api/auth/login")
+            .send({
+                email: "client.test@example.com",
+                password: "ClientPassword123",
+            });
+        expect(clientLogin.statusCode).toBe(200);
+        clientToken = clientLogin.body.data.token;
+        clientId = clientLogin.body.data.user.id;
+
+        const freelancerLogin = await request(app)
+            .post("/api/auth/login")
+            .send({
+                email: "himanshu.test@example.com",
+                password: "TestPassword123",
+            });
+        expect(freelancerLogin.statusCode).toBe(200);
+        freelancerToken = freelancerLogin.body.data.token;
+        freelancerId = freelancerLogin.body.data.user.id;
+
+        const secondFreelancerLogin = await request(app)
+            .post("/api/auth/login")
+            .send({
+                email: "freelancer2.test@example.com",
+                password: "TestPassword456",
+            });
+        expect(secondFreelancerLogin.statusCode).toBe(200);
+        secondFreelancerToken =
+            secondFreelancerLogin.body.data.token;
+        secondFreelancerId =
+            secondFreelancerLogin.body.data.user.id;
+
+        adminToken = jwt.sign(
+            {
+                userId: secondFreelancerId,
+                role: "admin",
+            },
+            process.env.JWT_SECRET
+        );
+    });
+
+    afterEach(cleanupContract);
+
+    test("client can complete an active contract and notify the freelancer after commit", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toMatchObject({
+            success: true,
+            message: "Contract completed successfully",
+            data: {
+                contract: {
+                    id: contractId,
+                    status: "completed",
+                },
+            },
+        });
+
+        const contractResult = await pool.query(
+            "SELECT status, updated_at FROM contracts WHERE id = $1",
+            [contractId]
+        );
+        expect(contractResult.rows[0].status).toBe("completed");
+        expect(
+            new Date(contractResult.rows[0].updated_at).getTime()
+        ).toBeGreaterThan(Date.now() - 60000);
+
+        const notificationResult = await pool.query(
+            `SELECT user_id, type, reference_type, reference_id
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1`,
+            [contractId]
+        );
+        expect(notificationResult.rowCount).toBe(1);
+        expect(notificationResult.rows[0]).toMatchObject({
+            user_id: freelancerId,
+            type: "contract_completed",
+            reference_type: "contract",
+            reference_id: contractId,
+        });
+    });
+
+    test("freelancer can complete an active contract and notify the client", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.data.contract.status).toBe("completed");
+
+        const notificationResult = await pool.query(
+            `SELECT user_id, type
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1`,
+            [contractId]
+        );
+        expect(notificationResult.rows).toEqual([
+            {
+                user_id: clientId,
+                type: "contract_completed",
+            },
+        ]);
+    });
+
+    test("unauthenticated users cannot complete a contract", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`);
+
+        expect(response.statusCode).toBe(401);
+    });
+
+    test("unrelated authenticated users cannot complete a contract", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set(
+                "Authorization",
+                authorizationHeader(secondFreelancerToken)
+            );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.body.message).toBe(
+            "You do not have permission to complete this contract"
+        );
+    });
+
+    test("admins cannot complete contracts", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(adminToken));
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    test("missing contracts return 404", async () => {
+        const response = await request(app)
+            .patch("/api/contracts/9223372036854775807/complete")
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(404);
+        expect(response.body.message).toBe("Contract not found");
+    });
+
+    test("invalid contract IDs return 400", async () => {
+        const response = await request(app)
+            .patch("/api/contracts/not-an-id/complete")
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(400);
+        expect(response.body.message).toBe("Invalid contract ID");
+    });
+
+    test("completed contracts cannot be completed again", async () => {
+        await createContract("completed");
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Contract is already completed"
+        );
+    });
+
+    test("cancelled contracts cannot be completed", async () => {
+        await createContract("cancelled");
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Only active contracts can be completed"
+        );
+    });
+
+    test("completion updates the contract timestamp", async () => {
+        await createContract();
+        const previousTimestamp = await pool.query(
+            "SELECT updated_at FROM contracts WHERE id = $1",
+            [contractId]
+        );
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(200);
+
+        const updatedContract = await pool.query(
+            "SELECT updated_at FROM contracts WHERE id = $1",
+            [contractId]
+        );
+        expect(
+            new Date(updatedContract.rows[0].updated_at).getTime()
+        ).toBeGreaterThan(
+            new Date(previousTimestamp.rows[0].updated_at).getTime()
+        );
+    });
+
+    test("a database failure rolls back completion and does not notify", async () => {
+        await createContract();
+
+        await pool.query(
+            `CREATE OR REPLACE FUNCTION contract_completion_failure_test()
+             RETURNS trigger
+             LANGUAGE plpgsql
+             AS $$
+             BEGIN
+                 IF NEW.status = 'completed' THEN
+                     RAISE EXCEPTION 'Forced contract completion failure';
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$`
+        );
+        await pool.query(
+            `CREATE TRIGGER contract_completion_failure_test
+             AFTER UPDATE ON contracts
+             FOR EACH ROW
+             EXECUTE FUNCTION contract_completion_failure_test()`
+        );
+        const errorSpy = jest
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+
+        try {
+            const response = await request(app)
+                .patch(`/api/contracts/${contractId}/complete`)
+                .set(
+                    "Authorization",
+                    authorizationHeader(clientToken)
+                );
+
+            expect(response.statusCode).toBe(500);
+
+            const contractResult = await pool.query(
+                "SELECT status FROM contracts WHERE id = $1",
+                [contractId]
+            );
+            expect(contractResult.rows[0].status).toBe("active");
+
+            const notificationResult = await pool.query(
+                `SELECT id
+                 FROM notifications
+                 WHERE reference_type = 'contract'
+                   AND reference_id = $1`,
+                [contractId]
+            );
+            expect(notificationResult.rowCount).toBe(0);
+        } finally {
+            await pool.query(
+                "DROP TRIGGER IF EXISTS contract_completion_failure_test ON contracts"
+            );
+            await pool.query(
+                "DROP FUNCTION IF EXISTS contract_completion_failure_test()"
+            );
+            errorSpy.mockRestore();
+        }
+    });
+
+    test("concurrent completion attempts produce one completion and one notification", async () => {
+        await createContract();
+
+        const responses = await Promise.all([
+            request(app)
+                .patch(`/api/contracts/${contractId}/complete`)
+                .set(
+                    "Authorization",
+                    authorizationHeader(clientToken)
+                ),
+            request(app)
+                .patch(`/api/contracts/${contractId}/complete`)
+                .set(
+                    "Authorization",
+                    authorizationHeader(freelancerToken)
+                ),
+        ]);
+
+        expect(responses.map((response) => response.statusCode).sort()).toEqual(
+            [200, 409]
+        );
+
+        const contractResult = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
+            [contractId]
+        );
+        expect(contractResult.rows[0].status).toBe("completed");
+
+        const notificationResult = await pool.query(
+            `SELECT id
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1`,
+            [contractId]
+        );
+        expect(notificationResult.rowCount).toBe(1);
+    });
+});

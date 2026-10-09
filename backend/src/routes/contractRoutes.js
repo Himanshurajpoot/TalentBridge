@@ -3,6 +3,7 @@ const express = require("express");
 const {
     getMyContracts,
     getContractById,
+    completeContract,
 } = require("../controllers/contractController");
 
 const authenticate = require("../middleware/authMiddleware");
@@ -22,6 +23,13 @@ router.get(
     authenticate,
     authorize("client", "freelancer", "admin"),
     getContractById
+);
+
+router.patch(
+    "/:contractId/complete",
+    authenticate,
+    authorize("client", "freelancer"),
+    completeContract
 );
 
 module.exports = router;
