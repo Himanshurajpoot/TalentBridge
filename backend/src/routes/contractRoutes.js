@@ -1,4 +1,5 @@
 const express = require("express");
+const expressRaw = express.raw;
 
 const {
     getMyContracts,
@@ -8,12 +9,22 @@ const {
 const {
     createContractPaymentOrder,
     verifyContractPayment,
+    handleRazorpayWebhook,
 } = require("../controllers/paymentController");
 
 const authenticate = require("../middleware/authMiddleware");
 const authorize = require("../middleware/authorize");
 
 const router = express.Router();
+
+router.post(
+    "/payment-webhooks/razorpay",
+    expressRaw({
+        type: "application/json",
+        limit: "1mb",
+    }),
+    handleRazorpayWebhook
+);
 
 router.post(
     "/payment-verifications/razorpay",

@@ -2,6 +2,7 @@ const pool = require("../config/db");
 const {
     createRazorpayOrder,
     verifyRazorpayPaymentSignature,
+    verifyRazorpayWebhookSignature,
 } = require("../services/razorpayService");
 
 const PAYMENT_PROVIDER = "razorpay";
@@ -27,6 +28,20 @@ const convertRupeesToPaise = (amount) => {
 const isValidContractId = (contractId) =>
     /^[1-9]\d*$/.test(contractId) &&
     BigInt(contractId) <= 9223372036854775807n;
+
+const convertRupeesToMinorUnits = (amount) => {
+    if (typeof amount !== "string" || !/^\d+(?:\.\d{1,2})?$/.test(amount)) {
+        return null;
+    }
+
+    const [rupees, fraction = ""] = amount.split(".");
+    return BigInt(rupees) * 100n + BigInt(fraction.padEnd(2, "0"));
+};
+
+const convertMinorUnitsToRupees = (amount) => {
+    const minorUnits = BigInt(amount);
+    return `${minorUnits / 100n}.${String(minorUnits % 100n).padStart(2, "0")}`;
+};
 
 const frontendOrderDetails = (payment, keyId) => ({
     paymentId: String(payment.id),
@@ -627,7 +642,286 @@ const verifyContractPayment = async (req, res) => {
     }
 };
 
+const handleRazorpayWebhook = async (req, res) => {
+    const signature = req.get("x-razorpay-signature");
+    const rawBody = req.body;
+
+    let signatureIsValid;
+    try {
+        signatureIsValid = verifyRazorpayWebhookSignature(
+            rawBody,
+            signature,
+        );
+    } catch {
+        return res.status(503).json({
+            success: false,
+            message: "Razorpay test-mode credentials are not configured",
+        });
+    }
+
+    if (!signatureIsValid) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid Razorpay webhook signature",
+        });
+    }
+
+    let event;
+    try {
+        event = JSON.parse(
+            Buffer.isBuffer(rawBody)
+                ? rawBody.toString("utf8")
+                : rawBody,
+        );
+    } catch {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid webhook JSON",
+        });
+    }
+
+    if (event.event !== "payment.captured") {
+        return res.status(200).json({
+            success: true,
+            message: "Webhook event ignored",
+        });
+    }
+
+    const eventId = req.get("x-razorpay-event-id")?.trim();
+    const paymentEntity = event.payload?.payment?.entity;
+    const orderId = paymentEntity?.order_id;
+    const paymentId = paymentEntity?.id;
+    const amountPaise = paymentEntity?.amount;
+    const currency = paymentEntity?.currency;
+    const captured = paymentEntity?.captured;
+    const paymentStatus = paymentEntity?.status;
+    const createdAt = event.created_at;
+    const isNonemptyString = (value) =>
+        typeof value === "string" && value.trim().length > 0;
+
+    if (
+        !isNonemptyString(eventId) ||
+        !isNonemptyString(orderId) ||
+        !isNonemptyString(paymentId) ||
+        !Number.isSafeInteger(amountPaise) ||
+        amountPaise <= 0 ||
+        !isNonemptyString(currency) ||
+        (paymentStatus !== undefined && paymentStatus !== "captured") ||
+        (captured !== undefined && captured !== true)
+    ) {
+        return res.status(200).json({
+            success: true,
+            message: "Webhook event ignored",
+        });
+    }
+
+    const occurredAt =
+        Number.isSafeInteger(createdAt) &&
+        createdAt >= 0 &&
+        createdAt <= 8640000000000
+            ? new Date(createdAt * 1000)
+            : null;
+
+    let client;
+
+    try {
+        client = await pool.connect();
+        await client.query("BEGIN");
+
+        const duplicateEvent = await client.query(
+            `SELECT id
+             FROM contract_payment_events
+             WHERE provider = $1
+               AND provider_event_reference = $2`,
+            [PAYMENT_PROVIDER, eventId],
+        );
+
+        if (duplicateEvent.rowCount > 0) {
+            await client.query("COMMIT");
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event already processed",
+            });
+        }
+
+        const paymentResult = await client.query(
+            `SELECT
+                id,
+                contract_id,
+                client_id,
+                freelancer_id,
+                amount,
+                currency,
+                provider_order_reference,
+                provider_payment_reference,
+                status
+             FROM contract_payments
+             WHERE provider = $1
+               AND (
+                    provider_order_reference = $2
+                    OR provider_payment_reference = $3
+               )
+             FOR UPDATE`,
+            [PAYMENT_PROVIDER, orderId, paymentId],
+        );
+
+        if (paymentResult.rowCount === 0) {
+            await client.query("ROLLBACK");
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event ignored",
+            });
+        }
+
+        const payment = paymentResult.rows[0];
+
+        if (
+            payment.provider_order_reference !== orderId ||
+            (payment.provider_payment_reference &&
+                payment.provider_payment_reference !== paymentId)
+        ) {
+            await client.query("ROLLBACK");
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event ignored",
+            });
+        }
+
+        const duplicatePayment = await client.query(
+            `SELECT id
+             FROM contract_payments
+             WHERE provider = $1
+               AND provider_payment_reference = $2
+               AND id <> $3
+             FOR UPDATE`,
+            [PAYMENT_PROVIDER, paymentId, payment.id],
+        );
+
+        if (duplicatePayment.rowCount > 0) {
+            await client.query("ROLLBACK");
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event ignored",
+            });
+        }
+
+        let storedAmount;
+        try {
+            storedAmount = convertRupeesToMinorUnits(payment.amount);
+        } catch {
+            storedAmount = null;
+        }
+
+        if (
+            storedAmount === null ||
+            storedAmount !== BigInt(amountPaise) ||
+            payment.currency !== currency
+        ) {
+            await client.query("ROLLBACK");
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event ignored",
+            });
+        }
+
+        if (payment.status !== "funding_pending" && payment.status !== "funded") {
+            await client.query("ROLLBACK");
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event ignored",
+            });
+        }
+
+        if (payment.status === "funding_pending") {
+            const updateResult = await client.query(
+                `UPDATE contract_payments
+                 SET status = 'funded',
+                     provider_payment_reference = $2,
+                     updated_at = NOW()
+                 WHERE id = $1
+                   AND status = 'funding_pending'`,
+                [payment.id, paymentId],
+            );
+
+            if (updateResult.rowCount !== 1) {
+                await client.query("ROLLBACK");
+                return res.status(200).json({
+                    success: true,
+                    message: "Webhook event ignored",
+                });
+            }
+        } else if (
+            payment.provider_payment_reference !== paymentId
+        ) {
+            await client.query("ROLLBACK");
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event ignored",
+            });
+        }
+
+        await client.query(
+            `INSERT INTO contract_payment_events (
+                contract_payment_id,
+                provider,
+                provider_event_reference,
+                source,
+                event_type,
+                amount,
+                currency,
+                event_data,
+                occurred_at
+             )
+             VALUES ($1, $2, $3, 'provider_webhook', 'payment_captured', $4, $5, $6, $7)`,
+            [
+                payment.id,
+                PAYMENT_PROVIDER,
+                eventId,
+                convertMinorUnitsToRupees(amountPaise),
+                currency,
+                JSON.stringify({
+                    order_id: orderId,
+                    payment_id: paymentId,
+                    payment_status: paymentStatus || "captured",
+                    captured: captured ?? true,
+                }),
+                occurredAt,
+            ],
+        );
+
+        await client.query("COMMIT");
+        return res.status(200).json({
+            success: true,
+            message: "Captured payment webhook processed",
+        });
+    } catch (error) {
+        if (client) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error("Webhook rollback error:", rollbackError.message);
+            }
+        }
+
+        if (error.code === "23505") {
+            return res.status(200).json({
+                success: true,
+                message: "Webhook event already processed",
+            });
+        }
+
+        console.error("Razorpay webhook processing error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to process payment webhook",
+        });
+    } finally {
+        client?.release();
+    }
+};
+
 module.exports = {
     createContractPaymentOrder,
     verifyContractPayment,
+    handleRazorpayWebhook,
 };
