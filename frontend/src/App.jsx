@@ -22,6 +22,8 @@ import MyJobs from "./pages/MyJobs";
 import JobApplications from "./pages/JobApplications";
 import Messages from "./pages/Messages";
 import CreateProject from "./pages/CreateProject";
+import Contracts from "./pages/Contracts";
+import ContractDetails from "./pages/ContractDetails";
 
 function ProtectedRoute({ children }) {
     const { user, loading } = useAuth();
@@ -230,6 +232,28 @@ function App() {
                     <ProtectedRoute>
                         <MainLayout>
                             <Messages />
+                        </MainLayout>
+                    </ProtectedRoute>
+                }
+            />
+
+            <Route
+                path="/contracts"
+                element={
+                    <ProtectedRoute>
+                        <MainLayout>
+                            <Contracts />
+                        </MainLayout>
+                    </ProtectedRoute>
+                }
+            />
+
+            <Route
+                path="/contracts/:contractId"
+                element={
+                    <ProtectedRoute>
+                        <MainLayout>
+                            <ContractDetails />
                         </MainLayout>
                     </ProtectedRoute>
                 }

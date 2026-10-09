@@ -17,6 +17,13 @@ function MainLayout({ children }) {
                     </Link>
 
                     <div className="flex items-center gap-4">
+                        <Link
+                            to="/contracts"
+                            className="text-sm font-medium text-gray-700 hover:text-blue-600"
+                        >
+                            Contracts
+                        </Link>
+
                         <NotificationBell />
 
                         <span className="text-gray-700">
