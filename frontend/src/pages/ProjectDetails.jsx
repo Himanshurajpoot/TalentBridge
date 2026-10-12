@@ -485,16 +485,29 @@ function ProjectDetails() {
                             </div>
                         )}
 
-                    {project.status === "open" && (
-                        <div className="border-b border-gray-200 py-8">
-                            <Link
-                                to={`/projects/${project.id}/proposal`}
-                                className="inline-flex rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white transition hover:bg-blue-700"
-                            >
-                                Submit Proposal →
-                            </Link>
-                        </div>
-                    )}
+                    {project.status === "open" &&
+                        ((user?.role === "freelancer" && (
+                            <div className="border-b border-gray-200 py-8">
+                                <Link
+                                    to={`/projects/${project.id}/proposal`}
+                                    className="inline-flex rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white transition hover:bg-blue-700"
+                                >
+                                    Submit Proposal →
+                                </Link>
+                            </div>
+                        )) ||
+                            (user?.role === "client" &&
+                                Number(project.client_id) ===
+                                    Number(user.id) && (
+                                    <div className="border-b border-gray-200 py-8">
+                                        <Link
+                                            to={`/projects/${project.id}/proposals`}
+                                            className="inline-flex rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white transition hover:bg-blue-700"
+                                        >
+                                            View Proposals
+                                        </Link>
+                                    </div>
+                                )))}
 
                     {canCompleteProject && (
                         <div className="border-b border-gray-200 py-8">

@@ -39,14 +39,14 @@ const verifyRazorpayWebhookSignature = (rawBody, signature) => {
     }
 
     const keyId = process.env.RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-    if (!keyId?.startsWith("rzp_test_") || !keySecret?.trim()) {
+    if (!keyId?.startsWith("rzp_test_") || !webhookSecret?.trim()) {
         throw new Error("Razorpay test credentials are not configured");
     }
 
     const expectedSignature = crypto
-        .createHmac("sha256", keySecret)
+        .createHmac("sha256", webhookSecret)
         .update(rawBody)
         .digest();
     const receivedSignature = Buffer.from(signature, "hex");

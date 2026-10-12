@@ -77,6 +77,20 @@ const createFakeClient = () => {
                 };
             }
 
+            if (query.startsWith("SELECT id, contract_id, client_id, amount, currency, provider, provider_order_reference, status FROM contract_payments")) {
+                const payments = [...databaseState.payments.values()]
+                    .filter(
+                        (item) =>
+                            String(item.contract_id) === String(params[0]) &&
+                            item.provider === params[1] &&
+                            item.status === "funding_pending" &&
+                            item.provider_order_reference !== null,
+                    )
+                    .sort((first, second) => Number(first.id) - Number(second.id))
+                    .slice(0, 2);
+                return { rowCount: payments.length, rows: payments.map((item) => ({ ...item })) };
+            }
+
             if (query.startsWith("SELECT id FROM contract_payments")) {
                 const payment = [...databaseState.payments.values()].find(
                     (item) =>
@@ -234,6 +248,32 @@ const seedContract = ({
     };
     databaseState.contracts.set(contract.id, contract);
     return contract;
+};
+
+const seedPayment = ({
+    id,
+    contractId,
+    clientId = 10,
+    amount = "1234.56",
+    currency = "INR",
+    provider = "razorpay",
+    orderReference = "order_test_existing",
+    status = "funding_pending",
+    idempotencyKey = `existing-${id}`,
+} = {}) => {
+    const payment = {
+        id: String(id),
+        contract_id: String(contractId),
+        client_id: clientId,
+        amount,
+        currency,
+        provider,
+        provider_order_reference: orderReference,
+        status,
+        idempotency_key: idempotencyKey,
+    };
+    databaseState.payments.set(payment.id, payment);
+    return payment;
 };
 
 describe("Contract payment order creation", () => {
@@ -439,6 +479,87 @@ describe("Contract payment order creation", () => {
         expect(repeatedResponse.body.data).toEqual(firstResponse.body.data);
         expect(createRazorpayOrder).toHaveBeenCalledTimes(1);
         expect(databaseState.payments.size).toBe(1);
+    });
+
+    test("reuses an existing pending order when the request has a fresh idempotency key", async () => {
+        seedContract({ id: 113 });
+        const existingPayment = seedPayment({
+            id: 11,
+            contractId: 113,
+        });
+
+        const response = await invokeController(113, "fresh-request-key");
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.data).toEqual({
+            paymentId: "11",
+            razorpayOrderId: "order_test_existing",
+            amount: 123456,
+            currency: "INR",
+            keyId: "rzp_test_public",
+        });
+        expect(databaseState.payments.get("11").idempotency_key).toBe(
+            existingPayment.idempotency_key,
+        );
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
+        expect(databaseState.payments.size).toBe(1);
+    });
+
+    test("does not reuse a funding-pending payment without an order reference", async () => {
+        seedContract({ id: 114 });
+        seedPayment({
+            id: 12,
+            contractId: 114,
+            orderReference: null,
+        });
+
+        const response = await invokeController(114, "fresh-incomplete-key");
+
+        expect(response.statusCode).toBe(409);
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
+        expect(databaseState.payments.size).toBe(1);
+    });
+
+    test("does not reuse an existing order when its amount differs from the contract", async () => {
+        seedContract({ id: 115 });
+        seedPayment({
+            id: 13,
+            contractId: 115,
+            amount: "1234.55",
+        });
+
+        const response = await invokeController(115, "fresh-amount-key");
+
+        expect(response.statusCode).toBe(409);
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
+        expect(databaseState.payments.size).toBe(1);
+    });
+
+    test("does not reuse an existing order with a different currency", async () => {
+        seedContract({ id: 116 });
+        seedPayment({
+            id: 14,
+            contractId: 116,
+            currency: "USD",
+        });
+
+        const response = await invokeController(116, "fresh-currency-key");
+
+        expect(response.statusCode).toBe(409);
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
+        expect(databaseState.payments.size).toBe(1);
+    });
+
+    test("does not reuse an order when multiple eligible payments exist", async () => {
+        seedContract({ id: 117 });
+        seedPayment({ id: 15, contractId: 117 });
+        seedPayment({ id: 16, contractId: 117 });
+
+        const response = await invokeController(117, "fresh-ambiguous-key");
+
+        expect(response.statusCode).toBe(409);
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
+        expect(databaseState.payments.size).toBe(2);
     });
 
     test("rejects an idempotency key reused for a different contract", async () => {

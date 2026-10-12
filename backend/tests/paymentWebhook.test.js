@@ -14,6 +14,7 @@ let events;
 let failEventInsert;
 let originalKeyId;
 let originalKeySecret;
+let originalWebhookSecret;
 
 const createClient = () => {
     let transactionSnapshot;
@@ -146,7 +147,7 @@ const capturedEvent = ({
 
 const signRawBody = (body) =>
     crypto
-        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
         .update(body)
         .digest("hex");
 
@@ -170,6 +171,7 @@ describe("Razorpay payment webhook", () => {
     beforeAll(() => {
         originalKeyId = process.env.RAZORPAY_KEY_ID;
         originalKeySecret = process.env.RAZORPAY_KEY_SECRET;
+        originalWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     });
 
     beforeEach(() => {
@@ -190,7 +192,8 @@ describe("Razorpay payment webhook", () => {
         pool.connect.mockImplementation(async () => createClient());
         pool.connect.mockClear();
         process.env.RAZORPAY_KEY_ID = "rzp_test_webhook";
-        process.env.RAZORPAY_KEY_SECRET = "webhook_test_secret";
+        process.env.RAZORPAY_KEY_SECRET = "checkout_test_secret";
+        process.env.RAZORPAY_WEBHOOK_SECRET = "webhook_test_secret";
         jest.spyOn(console, "error").mockImplementation(() => {});
     });
 
@@ -209,6 +212,12 @@ describe("Razorpay payment webhook", () => {
             delete process.env.RAZORPAY_KEY_SECRET;
         } else {
             process.env.RAZORPAY_KEY_SECRET = originalKeySecret;
+        }
+
+        if (originalWebhookSecret === undefined) {
+            delete process.env.RAZORPAY_WEBHOOK_SECRET;
+        } else {
+            process.env.RAZORPAY_WEBHOOK_SECRET = originalWebhookSecret;
         }
     });
 
@@ -258,6 +267,21 @@ describe("Razorpay payment webhook", () => {
 
         expect(response.statusCode).toBe(400);
         expect(payment.status).toBe("funding_pending");
+    });
+
+    test("missing webhook secret returns the configuration error", async () => {
+        delete process.env.RAZORPAY_WEBHOOK_SECRET;
+        const response = await postWebhook(
+            JSON.stringify(capturedEvent()),
+            { signature: "a".repeat(64) },
+        );
+
+        expect(response.statusCode).toBe(503);
+        expect(response.body.message).toBe(
+            "Razorpay test-mode credentials are not configured",
+        );
+        expect(payment.status).toBe("funding_pending");
+        expect(pool.connect).not.toHaveBeenCalled();
     });
 
     test("malformed signature length returns 400", async () => {

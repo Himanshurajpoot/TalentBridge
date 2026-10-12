@@ -199,6 +199,69 @@ const createContractPaymentOrder = async (req, res) => {
             });
         }
 
+        const reusablePaymentResult = await client.query(
+            `SELECT
+                id,
+                contract_id,
+                client_id,
+                amount,
+                currency,
+                provider,
+                provider_order_reference,
+                status
+             FROM contract_payments
+             WHERE contract_id = $1
+               AND provider = $2
+               AND status = 'funding_pending'
+               AND provider_order_reference IS NOT NULL
+             ORDER BY id
+             LIMIT 2
+             FOR UPDATE`,
+            [contract.id, PAYMENT_PROVIDER],
+        );
+
+        if (reusablePaymentResult.rowCount > 0) {
+            const reusablePayment = reusablePaymentResult.rows[0];
+            const reusableAmountPaise = convertRupeesToPaise(
+                reusablePayment.amount,
+            );
+            const isReusablePaymentValid =
+                reusablePaymentResult.rowCount === 1 &&
+                String(reusablePayment.contract_id) === String(contract.id) &&
+                Number(reusablePayment.client_id) === Number(contract.client_id) &&
+                Number(reusablePayment.client_id) === Number(req.user.id) &&
+                reusablePayment.provider === PAYMENT_PROVIDER &&
+                reusablePayment.status === "funding_pending" &&
+                typeof reusablePayment.provider_order_reference === "string" &&
+                reusablePayment.provider_order_reference.trim().length > 0 &&
+                reusablePayment.currency === PAYMENT_CURRENCY &&
+                reusableAmountPaise === amountPaise;
+
+            if (!isReusablePaymentValid) {
+                await client.query("ROLLBACK");
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "A payment order already exists or requires reconciliation for this contract",
+                });
+            }
+
+            await client.query("COMMIT");
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    ...frontendOrderDetails(
+                        {
+                            ...reusablePayment,
+                            amount_paise: reusableAmountPaise,
+                        },
+                        keyId,
+                    ),
+                },
+            });
+        }
+
         const inProgressResult = await client.query(
             `SELECT id
              FROM contract_payments
