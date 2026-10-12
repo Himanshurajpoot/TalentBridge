@@ -5,6 +5,7 @@ const {
     getMyContracts,
     getContractById,
     completeContract,
+    submitContractWork,
 } = require("../controllers/contractController");
 const {
     createContractPaymentOrder,
@@ -45,6 +46,13 @@ router.get(
     authenticate,
     authorize("client", "freelancer", "admin"),
     getContractById
+);
+
+router.post(
+    "/:contractId/submit-work",
+    authenticate,
+    authorize("freelancer"),
+    submitContractWork
 );
 
 router.patch(

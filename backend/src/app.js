@@ -47,9 +47,9 @@ app.options(
 
 app.use(helmet());
 
-app.use("/api/contracts", contractRoutes);
-
 app.use(express.json({ limit: "1mb" }));
+
+app.use("/api/contracts", contractRoutes);
 
 app.get("/api/health", (req, res) => {
     res.status(200).json({

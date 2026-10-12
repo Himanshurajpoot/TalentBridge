@@ -208,6 +208,245 @@ describe("Contract completion API", () => {
         }
     });
 
+        test("freelancer can submit work for an active contract", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            )
+            .send({
+                message: "I have completed the requested work.",
+                submission_url: "https://github.com/example/project",
+            });
+
+        expect(response.statusCode).toBe(201);
+        expect(response.body).toMatchObject({
+            success: true,
+            message: "Work submitted successfully",
+        });
+
+        const contractResult = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
+            [contractId]
+        );
+
+        expect(contractResult.rows[0].status).toBe("work_submitted");
+
+        const submissionResult = await pool.query(
+            `SELECT
+                contract_id,
+                freelancer_id,
+                message,
+                submission_url
+             FROM contract_work_submissions
+             WHERE contract_id = $1`,
+            [contractId]
+        );
+
+        expect(submissionResult.rowCount).toBe(1);
+        expect(submissionResult.rows[0]).toMatchObject({
+            contract_id: String(contractId),
+            freelancer_id: freelancerId,
+            message: "I have completed the requested work.",
+            submission_url: "https://github.com/example/project",
+        });
+
+        const notificationResult = await pool.query(
+            `SELECT user_id, type, reference_type, reference_id
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1`,
+            [contractId]
+        );
+
+        expect(notificationResult.rowCount).toBe(1);
+        expect(notificationResult.rows[0]).toMatchObject({
+            user_id: clientId,
+            type: "work_submitted",
+            reference_type: "contract",
+            reference_id: contractId,
+        });
+    });
+
+    test("client cannot submit work", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(clientToken)
+            )
+            .send({
+                message: "Client attempting submission.",
+            });
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    test("admin cannot submit work", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(adminToken)
+            )
+            .send({
+                message: "Admin attempting submission.",
+            });
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    test("unrelated freelancer cannot submit work", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(secondFreelancerToken)
+            )
+            .send({
+                message: "Unrelated freelancer attempting submission.",
+            });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.body.message).toBe(
+            "Only the contract freelancer can submit work"
+        );
+    });
+
+    test("unauthenticated users cannot submit work", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .send({
+                message: "Unauthenticated submission.",
+            });
+
+        expect(response.statusCode).toBe(401);
+    });
+
+    test("submission message is required", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            )
+            .send({
+                submission_url: "https://github.com/example/project",
+            });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.body.message).toBe(
+            "Submission message is required"
+        );
+    });
+
+    test("submission URL is optional", async () => {
+        await createContract();
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            )
+            .send({
+                message: "Work completed without an external URL.",
+            });
+
+        expect(response.statusCode).toBe(201);
+
+        const submissionResult = await pool.query(
+            `SELECT submission_url
+             FROM contract_work_submissions
+             WHERE contract_id = $1`,
+            [contractId]
+        );
+
+        expect(submissionResult.rows[0].submission_url).toBeNull();
+    });
+
+    test("work cannot be submitted twice", async () => {
+        await createContract();
+
+        const firstResponse = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            )
+            .send({
+                message: "First submission.",
+            });
+
+        expect(firstResponse.statusCode).toBe(201);
+
+        const secondResponse = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            )
+            .send({
+                message: "Second submission.",
+            });
+
+        expect(secondResponse.statusCode).toBe(409);
+        expect(secondResponse.body.message).toBe(
+            "Work has already been submitted for this contract"
+        );
+    });
+
+    test("completed contracts cannot accept work submissions", async () => {
+        await createContract("completed");
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            )
+            .send({
+                message: "Submission after completion.",
+            });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Only active contracts can accept a work submission"
+        );
+    });
+
+    test("cancelled contracts cannot accept work submissions", async () => {
+        await createContract("cancelled");
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                authorizationHeader(freelancerToken)
+            )
+            .send({
+                message: "Submission after cancellation.",
+            });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Only active contracts can accept a work submission"
+        );
+    });
+
     test("client can complete an active contract and notify the freelancer after commit", async () => {
         await createContract();
 

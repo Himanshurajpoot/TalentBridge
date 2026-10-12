@@ -139,6 +139,163 @@ const getContractById = async (req, res) => {
     }
 };
 
+const submitContractWork = async (req, res) => {
+    const { contractId } = req.params;
+    const { message, submission_url: submissionUrl } = req.body || {};
+
+    if (
+        !/^[1-9]\d*$/.test(contractId) ||
+        BigInt(contractId) > 9223372036854775807n
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid contract ID",
+        });
+    }
+
+    if (typeof message !== "string" || !message.trim()) {
+        return res.status(400).json({
+            success: false,
+            message: "Submission message is required",
+        });
+    }
+
+    if (
+        submissionUrl !== undefined &&
+        submissionUrl !== null &&
+        (typeof submissionUrl !== "string" || !submissionUrl.trim())
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "Submission URL must be a non-empty string when provided",
+        });
+    }
+
+    let client;
+    let transactionCommitted = false;
+
+    try {
+        client = await pool.connect();
+        await client.query("BEGIN");
+
+        const contractResult = await client.query(
+            `SELECT
+                id,
+                client_id,
+                freelancer_id,
+                status
+             FROM contracts
+             WHERE id = $1
+             FOR UPDATE`,
+            [contractId],
+        );
+
+        if (contractResult.rowCount === 0) {
+            await client.query("ROLLBACK");
+
+            return res.status(404).json({
+                success: false,
+                message: "Contract not found",
+            });
+        }
+
+        const contract = contractResult.rows[0];
+
+        if (Number(contract.freelancer_id) !== Number(req.user.id)) {
+            await client.query("ROLLBACK");
+
+            return res.status(403).json({
+                success: false,
+                message: "Only the contract freelancer can submit work",
+            });
+        }
+
+        if (contract.status !== "active") {
+            await client.query("ROLLBACK");
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    contract.status === "work_submitted"
+                        ? "Work has already been submitted for this contract"
+                        : "Only active contracts can accept a work submission",
+            });
+        }
+
+        const submissionResult = await client.query(
+            `INSERT INTO contract_work_submissions (
+                contract_id,
+                freelancer_id,
+                message,
+                submission_url
+             )
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [
+                contract.id,
+                contract.freelancer_id,
+                message.trim(),
+                submissionUrl?.trim() || null,
+            ],
+        );
+
+        await client.query(
+            `UPDATE contracts
+             SET status = 'work_submitted',
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [contract.id],
+        );
+
+        await client.query("COMMIT");
+        transactionCommitted = true;
+
+        try {
+            await createNotification({
+                userId: contract.client_id,
+                type: "work_submitted",
+                title: "Work Submitted",
+                message: "The freelancer has submitted work for your contract.",
+                referenceType: "contract",
+                referenceId: contract.id,
+            });
+        } catch (notificationError) {
+            console.error(
+                "Work submission notification error:",
+                notificationError,
+            );
+        }
+
+        return res.status(201).json({
+            success: true,
+            message: "Work submitted successfully",
+            data: {
+                submission: submissionResult.rows[0],
+            },
+        });
+    } catch (error) {
+        if (client && !transactionCommitted) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error(
+                    "Work submission rollback error:",
+                    rollbackError,
+                );
+            }
+        }
+
+        console.error("Submit contract work error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error",
+        });
+    } finally {
+        client?.release();
+    }
+};
+
 const completeContract = async (req, res) => {
     const { contractId } = req.params;
 
@@ -284,4 +441,5 @@ module.exports = {
     getMyContracts,
     getContractById,
     completeContract,
+    submitContractWork,
 };
