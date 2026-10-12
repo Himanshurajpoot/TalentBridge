@@ -159,6 +159,55 @@ describe("Contract completion API", () => {
 
     afterEach(cleanupContract);
 
+    test("contract details prefer a funded payment over a newer pending attempt", async () => {
+        await createContract();
+
+        try {
+            await pool.query(
+                `INSERT INTO contract_payments (
+                    contract_id,
+                    client_id,
+                    freelancer_id,
+                    amount,
+                    agreed_amount_snapshot,
+                    currency,
+                    provider,
+                    provider_order_reference,
+                    provider_payment_reference,
+                    idempotency_key,
+                    status
+                )
+                VALUES
+                    ($1, $2, $3, 55000, 55000, 'INR', 'razorpay',
+                     'order_funded_test', 'payment_funded_test',
+                     'contract-test-funded', 'funded'),
+                    ($1, $2, $3, 55000, 55000, 'INR', 'razorpay',
+                     'order_pending_test', NULL,
+                     'contract-test-pending', 'funding_pending')`,
+                [contractId, clientId, freelancerId],
+            );
+
+            const response = await request(app)
+                .get(`/api/contracts/${contractId}`)
+                .set("Authorization", authorizationHeader(clientToken));
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body.data.payment).toMatchObject({
+                status: "funded",
+                provider_order_reference: "order_funded_test",
+                provider_payment_reference: "payment_funded_test",
+                amount: "55000.00",
+                currency: "INR",
+                provider: "razorpay",
+            });
+        } finally {
+            await pool.query(
+                "DELETE FROM contract_payments WHERE contract_id = $1",
+                [contractId],
+            );
+        }
+    });
+
     test("client can complete an active contract and notify the freelancer after commit", async () => {
         await createContract();
 

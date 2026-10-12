@@ -63,6 +63,25 @@ function getStatusClasses(status) {
     }
 }
 
+function getPaymentStatusClasses(status) {
+    switch (status) {
+        case "funded":
+            return "bg-green-100 text-green-700";
+
+        case "funding_pending":
+            return "bg-amber-100 text-amber-700";
+
+        case "failed":
+        case "refunded":
+        case "cancelled":
+        case "disputed":
+            return "bg-red-100 text-red-700";
+
+        default:
+            return "bg-gray-100 text-gray-700";
+    }
+}
+
 function loadRazorpayCheckout() {
     if (window.Razorpay) {
         return Promise.resolve(true);
@@ -105,6 +124,7 @@ function ContractDetails() {
     const { contractId } = useParams();
     const { user } = useAuth();
     const [contract, setContract] = useState(null);
+    const [payment, setPayment] = useState(null);
     const [loading, setLoading] = useState(true);
     const [completing, setCompleting] = useState(false);
     const [completionError, setCompletionError] = useState("");
@@ -143,6 +163,7 @@ function ContractDetails() {
 
                 if (mounted) {
                     setContract(response.data.data.contract);
+                    setPayment(response.data.data.payment ?? null);
                 }
             } catch (requestError) {
                 console.error(
@@ -538,6 +559,68 @@ function ContractDetails() {
                             {formatDate(contract.created_at)}
                         </p>
                     </div>
+                </section>
+
+                <section className="mt-8 border-t pt-6">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                        Payment
+                    </h2>
+                    {!payment ? (
+                        <p className="mt-3 text-gray-600">
+                            No payment has been initiated.
+                        </p>
+                    ) : (
+                        <div className="mt-4 grid gap-5 sm:grid-cols-2">
+                            <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                    Amount
+                                </p>
+                                <p className="mt-1 font-semibold text-gray-900">
+                                    {formatCurrency(payment.amount)}
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                    Provider
+                                </p>
+                                <p className="mt-1 text-gray-900">
+                                    {formatStatus(payment.provider)}
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                    Status
+                                </p>
+                                <span
+                                    className={`mt-1 inline-flex rounded-full px-3 py-1 text-sm font-semibold ${getPaymentStatusClasses(
+                                        payment.status
+                                    )}`}
+                                >
+                                    {formatStatus(payment.status)}
+                                </span>
+                            </div>
+                            {payment.provider_order_reference && (
+                                <div>
+                                    <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                        Razorpay Order ID
+                                    </p>
+                                    <p className="mt-1 break-all text-sm text-gray-900">
+                                        {payment.provider_order_reference}
+                                    </p>
+                                </div>
+                            )}
+                            {payment.provider_payment_reference && (
+                                <div>
+                                    <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                        Razorpay Payment ID
+                                    </p>
+                                    <p className="mt-1 break-all text-sm text-gray-900">
+                                        {payment.provider_payment_reference}
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </section>
 
                 <section className="mt-8 border-t pt-6">

@@ -104,10 +104,29 @@ const getContractById = async (req, res) => {
             });
         }
 
+        const paymentResult = await pool.query(
+            `SELECT
+                id,
+                amount,
+                currency,
+                provider,
+                provider_order_reference,
+                provider_payment_reference,
+                status
+             FROM contract_payments
+             WHERE contract_id = $1
+             ORDER BY
+                CASE WHEN status = 'funded' THEN 0 ELSE 1 END,
+                id DESC
+             LIMIT 1`,
+            [contract.id],
+        );
+
         return res.status(200).json({
             success: true,
             data: {
                 contract,
+                payment: paymentResult.rows[0] || null,
             },
         });
     } catch (error) {
