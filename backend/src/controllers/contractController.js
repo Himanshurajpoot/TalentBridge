@@ -437,9 +437,158 @@ const completeContract = async (req, res) => {
     }
 };
 
+const approveContractWork = async (req, res) => {
+    const { contractId } = req.params;
+
+    if (
+        !/^[1-9]\d*$/.test(contractId) ||
+        BigInt(contractId) > 9223372036854775807n
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid contract ID",
+        });
+    }
+
+    let client;
+    let transactionCommitted = false;
+
+    try {
+        client = await pool.connect();
+        await client.query("BEGIN");
+
+        const contractResult = await client.query(
+            `SELECT
+                id,
+                project_id,
+                client_id,
+                freelancer_id,
+                status
+             FROM contracts
+             WHERE id = $1
+             FOR UPDATE`,
+            [contractId],
+        );
+
+        if (contractResult.rowCount === 0) {
+            await client.query("ROLLBACK");
+
+            return res.status(404).json({
+                success: false,
+                message: "Contract not found",
+            });
+        }
+
+        const contract = contractResult.rows[0];
+
+        if (Number(contract.client_id) !== Number(req.user.id)) {
+            await client.query("ROLLBACK");
+
+            return res.status(403).json({
+                success: false,
+                message: "Only the contract client can approve work",
+            });
+        }
+
+        if (contract.status !== "work_submitted") {
+            await client.query("ROLLBACK");
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Only submitted work can be approved for this contract",
+            });
+        }
+
+        const contractUpdateResult = await client.query(
+            `UPDATE contracts
+             SET status = 'completed',
+                 updated_at = NOW()
+             WHERE id = $1
+               AND status = 'work_submitted'
+             RETURNING *`,
+            [contractId],
+        );
+
+        if (contractUpdateResult.rowCount !== 1) {
+            await client.query("ROLLBACK");
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Only submitted work can be approved for this contract",
+            });
+        }
+
+        const projectResult = await client.query(
+            `UPDATE projects
+             SET status = 'completed',
+                 updated_at = NOW()
+             WHERE id = $1
+             RETURNING id, status`,
+            [contract.project_id],
+        );
+
+        if (projectResult.rowCount !== 1) {
+            throw new Error(
+                "Contract project not found during work approval",
+            );
+        }
+
+        await client.query("COMMIT");
+        transactionCommitted = true;
+
+        try {
+            await createNotification({
+                userId: contract.freelancer_id,
+                type: "contract_completed",
+                title: "Work Approved - Contract Completed",
+                message:
+                    "The client approved your submitted work and the contract is completed.",
+                referenceType: "contract",
+                referenceId: contract.id,
+            });
+        } catch (notificationError) {
+            console.error(
+                "Contract work approval notification error:",
+                notificationError,
+            );
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Contract work approved successfully",
+            data: {
+                contract: contractUpdateResult.rows[0],
+            },
+        });
+    } catch (error) {
+        if (client && !transactionCommitted) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error(
+                    "Contract work approval rollback error:",
+                    rollbackError,
+                );
+            }
+        }
+
+        console.error("Approve contract work error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error",
+        });
+    } finally {
+        client?.release();
+    }
+};
+
 module.exports = {
     getMyContracts,
     getContractById,
     completeContract,
     submitContractWork,
+    approveContractWork,
 };

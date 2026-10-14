@@ -82,6 +82,13 @@ describe("Contract completion API", () => {
         contractId = contractResult.rows[0].id;
     };
 
+    const markContractWorkSubmitted = async () => {
+        await pool.query(
+            "UPDATE contracts SET status = 'work_submitted' WHERE id = $1",
+            [contractId],
+        );
+    };
+
     const cleanupContract = async () => {
         if (contractId) {
             await pool.query(
@@ -445,6 +452,243 @@ describe("Contract completion API", () => {
         expect(response.body.message).toBe(
             "Only active contracts can accept a work submission"
         );
+    });
+
+    test("client can approve submitted work and notify the freelancer after completion", async () => {
+        await createContract();
+        await markContractWorkSubmitted();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/approve`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toMatchObject({
+            success: true,
+            message: "Contract work approved successfully",
+            data: {
+                contract: {
+                    id: contractId,
+                    status: "completed",
+                },
+            },
+        });
+
+        const contractResult = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
+            [contractId],
+        );
+        expect(contractResult.rows[0].status).toBe("completed");
+
+        const projectResult = await pool.query(
+            "SELECT status FROM projects WHERE id = $1",
+            [projectId],
+        );
+        expect(projectResult.rows[0].status).toBe("completed");
+
+        const notificationResult = await pool.query(
+            `SELECT user_id, type, title, message, reference_type, reference_id
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1`,
+            [contractId],
+        );
+        expect(notificationResult.rows).toEqual([
+            expect.objectContaining({
+                user_id: freelancerId,
+                type: "contract_completed",
+                title: "Work Approved - Contract Completed",
+                message:
+                    "The client approved your submitted work and the contract is completed.",
+                reference_type: "contract",
+                reference_id: contractId,
+            }),
+        ]);
+    });
+
+    test("freelancer cannot approve submitted work", async () => {
+        await createContract();
+        await markContractWorkSubmitted();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/approve`)
+            .set("Authorization", authorizationHeader(freelancerToken));
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    test("admin cannot approve submitted work", async () => {
+        await createContract();
+        await markContractWorkSubmitted();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/approve`)
+            .set("Authorization", authorizationHeader(adminToken));
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    test("unrelated client cannot approve submitted work", async () => {
+        await createContract();
+        await markContractWorkSubmitted();
+        const unrelatedClientToken = jwt.sign(
+            {
+                userId: secondFreelancerId,
+                role: "client",
+            },
+            process.env.JWT_SECRET,
+        );
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/approve`)
+            .set(
+                "Authorization",
+                authorizationHeader(unrelatedClientToken),
+            );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.body.message).toBe(
+            "Only the contract client can approve work",
+        );
+    });
+
+    test("unauthenticated users cannot approve submitted work", async () => {
+        await createContract();
+        await markContractWorkSubmitted();
+
+        const response = await request(app).patch(
+            `/api/contracts/${contractId}/approve`,
+        );
+
+        expect(response.statusCode).toBe(401);
+    });
+
+    test("approval returns 404 for a missing contract", async () => {
+        const response = await request(app)
+            .patch("/api/contracts/9223372036854775807/approve")
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(404);
+        expect(response.body.message).toBe("Contract not found");
+    });
+
+    test("approval returns 400 for an invalid contract ID", async () => {
+        const response = await request(app)
+            .patch("/api/contracts/not-an-id/approve")
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(400);
+        expect(response.body.message).toBe("Invalid contract ID");
+    });
+
+    test.each(["active", "completed", "cancelled"])(
+        "contract with status %s cannot be approved",
+        async (status) => {
+            await createContract(status);
+
+            const response = await request(app)
+                .patch(`/api/contracts/${contractId}/approve`)
+                .set("Authorization", authorizationHeader(clientToken));
+
+            expect(response.statusCode).toBe(409);
+            expect(response.body.message).toBe(
+                "Only submitted work can be approved for this contract",
+            );
+        },
+    );
+
+    test("concurrent approval attempts produce one success and one conflict", async () => {
+        await createContract();
+        await markContractWorkSubmitted();
+
+        const responses = await Promise.all([
+            request(app)
+                .patch(`/api/contracts/${contractId}/approve`)
+                .set("Authorization", authorizationHeader(clientToken)),
+            request(app)
+                .patch(`/api/contracts/${contractId}/approve`)
+                .set("Authorization", authorizationHeader(clientToken)),
+        ]);
+
+        expect(responses.map((response) => response.statusCode).sort()).toEqual(
+            [200, 409],
+        );
+
+        const notificationResult = await pool.query(
+            `SELECT id
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1
+               AND type = 'contract_completed'`,
+            [contractId],
+        );
+        expect(notificationResult.rowCount).toBe(1);
+    });
+
+    test("project update failure rolls back approval and does not notify", async () => {
+        await createContract();
+        await markContractWorkSubmitted();
+
+        await pool.query(
+            `CREATE OR REPLACE FUNCTION project_work_approval_failure_test()
+             RETURNS trigger
+             LANGUAGE plpgsql
+             AS $$
+             BEGIN
+                 IF NEW.status = 'completed' THEN
+                     RAISE EXCEPTION 'Forced project work approval failure';
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$`,
+        );
+        await pool.query(
+            `CREATE TRIGGER project_work_approval_failure_test
+             AFTER UPDATE ON projects
+             FOR EACH ROW
+             EXECUTE FUNCTION project_work_approval_failure_test()`,
+        );
+        const errorSpy = jest
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+
+        try {
+            const response = await request(app)
+                .patch(`/api/contracts/${contractId}/approve`)
+                .set("Authorization", authorizationHeader(clientToken));
+
+            expect(response.statusCode).toBe(500);
+
+            const contractResult = await pool.query(
+                "SELECT status FROM contracts WHERE id = $1",
+                [contractId],
+            );
+            expect(contractResult.rows[0].status).toBe("work_submitted");
+
+            const projectResult = await pool.query(
+                "SELECT status FROM projects WHERE id = $1",
+                [projectId],
+            );
+            expect(projectResult.rows[0].status).toBe("in_progress");
+
+            const notificationResult = await pool.query(
+                `SELECT id
+                 FROM notifications
+                 WHERE reference_type = 'contract'
+                   AND reference_id = $1
+                   AND type = 'contract_completed'`,
+                [contractId],
+            );
+            expect(notificationResult.rowCount).toBe(0);
+        } finally {
+            await pool.query(
+                "DROP TRIGGER IF EXISTS project_work_approval_failure_test ON projects",
+            );
+            await pool.query(
+                "DROP FUNCTION IF EXISTS project_work_approval_failure_test()",
+            );
+            errorSpy.mockRestore();
+        }
     });
 
     test("client can complete an active contract and notify the freelancer after commit", async () => {

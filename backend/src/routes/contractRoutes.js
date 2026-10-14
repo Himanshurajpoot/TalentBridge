@@ -6,6 +6,7 @@ const {
     getContractById,
     completeContract,
     submitContractWork,
+    approveContractWork,
 } = require("../controllers/contractController");
 const {
     createContractPaymentOrder,
@@ -53,6 +54,13 @@ router.post(
     authenticate,
     authorize("freelancer"),
     submitContractWork
+);
+
+router.patch(
+    "/:contractId/approve",
+    authenticate,
+    authorize("client"),
+    approveContractWork
 );
 
 router.patch(
