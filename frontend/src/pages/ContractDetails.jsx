@@ -125,6 +125,7 @@ function ContractDetails() {
     const { user } = useAuth();
     const [contract, setContract] = useState(null);
     const [payment, setPayment] = useState(null);
+    const [workSubmission, setWorkSubmission] = useState(null);
     const [loading, setLoading] = useState(true);
     const [completing, setCompleting] = useState(false);
     const [completionError, setCompletionError] = useState("");
@@ -164,6 +165,9 @@ function ContractDetails() {
                 if (mounted) {
                     setContract(response.data.data.contract);
                     setPayment(response.data.data.payment ?? null);
+                    setWorkSubmission(
+                        response.data.data.workSubmission ?? null
+                    );
                 }
             } catch (requestError) {
                 console.error(
@@ -508,6 +512,46 @@ function ContractDetails() {
                             {formatStatus(contract.project?.status)}
                         </span>
                     </p>
+                </section>
+
+                <section className="mt-8 border-t pt-6">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                        Work Submission
+                    </h2>
+                    {!workSubmission ? (
+                        <p className="mt-3 text-gray-600">
+                            No work has been submitted.
+                        </p>
+                    ) : (
+                        <div className="mt-3 space-y-4">
+                            <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                    Submission Message
+                                </p>
+                                <p className="mt-1 whitespace-pre-line leading-7 text-gray-700">
+                                    {workSubmission.message}
+                                </p>
+                            </div>
+                            {workSubmission.submission_url && (
+                                <div>
+                                    <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                        Submission URL
+                                    </p>
+                                    <p className="mt-1 break-all text-sm text-gray-700">
+                                        {workSubmission.submission_url}
+                                    </p>
+                                </div>
+                            )}
+                            <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                                    Submitted
+                                </p>
+                                <p className="mt-1 text-gray-700">
+                                    {formatDate(workSubmission.submitted_at)}
+                                </p>
+                            </div>
+                        </div>
+                    )}
                 </section>
 
                 <section className="mt-8 grid gap-5 border-t pt-6 sm:grid-cols-2 lg:grid-cols-3">

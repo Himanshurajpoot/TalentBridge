@@ -122,11 +122,25 @@ const getContractById = async (req, res) => {
             [contract.id],
         );
 
+        const workSubmissionResult = await pool.query(
+            `SELECT
+                id,
+                message,
+                submission_url,
+                submitted_at,
+                freelancer_id
+             FROM contract_work_submissions
+             WHERE contract_id = $1
+             LIMIT 1`,
+            [contractId],
+        );
+
         return res.status(200).json({
             success: true,
             data: {
                 contract,
                 payment: paymentResult.rows[0] || null,
+                workSubmission: workSubmissionResult.rows[0] || null,
             },
         });
     } catch (error) {

@@ -89,6 +89,96 @@ describe("Contract completion API", () => {
         );
     };
 
+    const createWorkSubmission = async (
+        submissionContractId = contractId,
+        submissionFreelancerId = freelancerId,
+        message = "Work submitted for contract review.",
+    ) => {
+        const result = await pool.query(
+            `INSERT INTO contract_work_submissions (
+                contract_id,
+                freelancer_id,
+                message,
+                submission_url
+             )
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, message, submission_url, submitted_at, freelancer_id`,
+            [
+                submissionContractId,
+                submissionFreelancerId,
+                message,
+                "https://example.com/submitted-work",
+            ],
+        );
+        return result.rows[0];
+    };
+
+    const createAdditionalContract = async () => {
+        const additionalProjectResult = await pool.query(
+            `INSERT INTO projects
+                (client_id, title, description, status)
+             VALUES ($1, $2, $3, 'in_progress')
+             RETURNING id`,
+            [
+                clientId,
+                "Additional Contract Test Project",
+                "Additional contract test terms.",
+            ],
+        );
+        const additionalProjectId = additionalProjectResult.rows[0].id;
+
+        const additionalProposalResult = await pool.query(
+            `INSERT INTO proposals
+                (
+                    project_id,
+                    freelancer_id,
+                    cover_letter,
+                    proposed_budget,
+                    estimated_days,
+                    status
+                )
+             VALUES ($1, $2, $3, $4, $5, 'accepted')
+             RETURNING id`,
+            [
+                additionalProjectId,
+                freelancerId,
+                "Additional contract test proposal.",
+                55000,
+                20,
+            ],
+        );
+        const additionalProposalId = additionalProposalResult.rows[0].id;
+
+        const additionalContractResult = await pool.query(
+            `INSERT INTO contracts
+                (
+                    proposal_id,
+                    project_id,
+                    client_id,
+                    freelancer_id,
+                    agreed_amount,
+                    terms,
+                    status
+                )
+             VALUES ($1, $2, $3, $4, $5, $6, 'work_submitted')
+             RETURNING id`,
+            [
+                additionalProposalId,
+                additionalProjectId,
+                clientId,
+                freelancerId,
+                55000,
+                "Additional contract test terms.",
+            ],
+        );
+
+        return {
+            contractId: additionalContractResult.rows[0].id,
+            proposalId: additionalProposalId,
+            projectId: additionalProjectId,
+        };
+    };
+
     const cleanupContract = async () => {
         if (contractId) {
             await pool.query(
@@ -207,10 +297,98 @@ describe("Contract completion API", () => {
                 currency: "INR",
                 provider: "razorpay",
             });
+            expect(response.body.data.workSubmission).toBeNull();
         } finally {
             await pool.query(
                 "DELETE FROM contract_payments WHERE contract_id = $1",
                 [contractId],
+            );
+        }
+    });
+
+    test("active contract details return no work submission", async () => {
+        await createContract("active");
+
+        const response = await request(app)
+            .get(`/api/contracts/${contractId}`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.data.workSubmission).toBeNull();
+    });
+
+    test("work-submitted contract details return the safe submission fields", async () => {
+        await createContract("work_submitted");
+        const submission = await createWorkSubmission();
+
+        const response = await request(app)
+            .get(`/api/contracts/${contractId}`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.data.workSubmission).toEqual({
+            id: String(submission.id),
+            message: submission.message,
+            submission_url: submission.submission_url,
+            submitted_at: submission.submitted_at.toISOString(),
+            freelancer_id: submission.freelancer_id,
+        });
+    });
+
+    test("completed contract details continue returning the work submission", async () => {
+        await createContract("completed");
+        const submission = await createWorkSubmission();
+
+        const response = await request(app)
+            .get(`/api/contracts/${contractId}`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.data.workSubmission).toMatchObject({
+            id: String(submission.id),
+            message: submission.message,
+            submission_url: submission.submission_url,
+            freelancer_id: submission.freelancer_id,
+        });
+    });
+
+    test("contract details return only the submission belonging to the requested contract", async () => {
+        await createContract("work_submitted");
+        const requestedSubmission = await createWorkSubmission(
+            contractId,
+            freelancerId,
+            "Submission for the requested contract.",
+        );
+        const additionalContract = await createAdditionalContract();
+
+        try {
+            await createWorkSubmission(
+                additionalContract.contractId,
+                freelancerId,
+                "Submission for another contract.",
+            );
+
+            const response = await request(app)
+                .get(`/api/contracts/${contractId}`)
+                .set("Authorization", authorizationHeader(clientToken));
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body.data.workSubmission).toMatchObject({
+                id: String(requestedSubmission.id),
+                message: "Submission for the requested contract.",
+            });
+        } finally {
+            await pool.query(
+                "DELETE FROM contracts WHERE id = $1",
+                [additionalContract.contractId],
+            );
+            await pool.query(
+                "DELETE FROM proposals WHERE id = $1",
+                [additionalContract.proposalId],
+            );
+            await pool.query(
+                "DELETE FROM projects WHERE id = $1",
+                [additionalContract.projectId],
             );
         }
     });
