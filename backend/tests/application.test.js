@@ -752,6 +752,23 @@ describe("Applications API", () => {
         });
     });
 
+    test("PATCH status-suffixed application URL should reject unauthorized freelancer", async () => {
+        const response = await request(app)
+            .patch(
+                `/api/jobs/${jobId}/applications/${applicationId}/status`
+            )
+            .set("Authorization", ["Bearer", freelancerToken].join(" "))
+            .send({
+                status: "accepted",
+            });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.body).toEqual({
+            success: false,
+            message: "You do not have permission to perform this action",
+        });
+    });
+
     test("PATCH application status should reject unauthorized freelancer", async () => {
         const response = await request(app)
             .patch(
