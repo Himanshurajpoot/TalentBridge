@@ -1,5 +1,4 @@
 const express = require("express");
-const expressRaw = express.raw;
 
 const {
     getMyContracts,
@@ -21,10 +20,6 @@ const router = express.Router();
 
 router.post(
     "/payment-webhooks/razorpay",
-    expressRaw({
-        type: "application/json",
-        limit: "1mb",
-    }),
     handleRazorpayWebhook
 );
 
