@@ -869,57 +869,23 @@ describe("Contract completion API", () => {
         }
     });
 
-    test("client can complete an active contract and notify the freelancer after commit", async () => {
+    test("client cannot complete an active contract through the legacy route", async () => {
         await createContract();
 
         const response = await request(app)
             .patch(`/api/contracts/${contractId}/complete`)
             .set("Authorization", authorizationHeader(clientToken));
 
-        expect(response.statusCode).toBe(200);
-        expect(response.body).toMatchObject({
-            success: true,
-            message: "Contract completed successfully",
-            data: {
-                contract: {
-                    id: contractId,
-                    status: "completed",
-                },
-            },
-        });
+        expect(response.statusCode).toBe(409);
 
-        const contractResult = await pool.query(
-            "SELECT status, updated_at FROM contracts WHERE id = $1",
+        const result = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
             [contractId]
         );
-        expect(contractResult.rows[0].status).toBe("completed");
-        expect(
-            new Date(contractResult.rows[0].updated_at).getTime()
-        ).toBeGreaterThan(Date.now() - 60000);
-
-        const projectResult = await pool.query(
-            "SELECT status FROM projects WHERE id = $1",
-            [projectId]
-        );
-        expect(projectResult.rows[0].status).toBe("completed");
-
-        const notificationResult = await pool.query(
-            `SELECT user_id, type, reference_type, reference_id
-             FROM notifications
-             WHERE reference_type = 'contract'
-               AND reference_id = $1`,
-            [contractId]
-        );
-        expect(notificationResult.rowCount).toBe(1);
-        expect(notificationResult.rows[0]).toMatchObject({
-            user_id: freelancerId,
-            type: "contract_completed",
-            reference_type: "contract",
-            reference_id: contractId,
-        });
+        expect(result.rows[0].status).toBe("active");
     });
 
-    test("freelancer can complete an active contract and notify the client", async () => {
+    test("freelancer cannot complete an active contract through the legacy route", async () => {
         await createContract();
 
         const response = await request(app)
@@ -929,22 +895,13 @@ describe("Contract completion API", () => {
                 authorizationHeader(freelancerToken)
             );
 
-        expect(response.statusCode).toBe(200);
-        expect(response.body.data.contract.status).toBe("completed");
+        expect(response.statusCode).toBe(403);
 
-        const notificationResult = await pool.query(
-            `SELECT user_id, type
-             FROM notifications
-             WHERE reference_type = 'contract'
-               AND reference_id = $1`,
+        const result = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
             [contractId]
         );
-        expect(notificationResult.rows).toEqual([
-            {
-                user_id: clientId,
-                type: "contract_completed",
-            },
-        ]);
+        expect(result.rows[0].status).toBe("active");
     });
 
     test("unauthenticated users cannot complete a contract", async () => {
@@ -956,7 +913,7 @@ describe("Contract completion API", () => {
         expect(response.statusCode).toBe(401);
     });
 
-    test("unrelated authenticated users cannot complete a contract", async () => {
+    test("unrelated freelancers cannot use the legacy completion route", async () => {
         await createContract();
 
         const response = await request(app)
@@ -968,7 +925,7 @@ describe("Contract completion API", () => {
 
         expect(response.statusCode).toBe(403);
         expect(response.body.message).toBe(
-            "You do not have permission to complete this contract"
+            "You do not have permission to perform this action"
         );
     });
 
@@ -980,6 +937,87 @@ describe("Contract completion API", () => {
             .set("Authorization", authorizationHeader(adminToken));
 
         expect(response.statusCode).toBe(403);
+    });
+
+    test("client can use the legacy route to approve submitted work", async () => {
+        await createContract("work_submitted");
+        await createWorkSubmission();
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toMatchObject({
+            success: true,
+            message: "Contract work approved successfully",
+            data: {
+                contract: {
+                    id: contractId,
+                    status: "completed",
+                },
+            },
+        });
+
+        const contractResult = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
+            [contractId]
+        );
+        expect(contractResult.rows[0].status).toBe("completed");
+
+        const projectResult = await pool.query(
+            "SELECT status FROM projects WHERE id = $1",
+            [projectId]
+        );
+        expect(projectResult.rows[0].status).toBe("completed");
+
+        const notificationResult = await pool.query(
+            `SELECT user_id, type
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1
+               AND type = 'contract_completed'`,
+            [contractId]
+        );
+        expect(notificationResult.rows).toEqual([
+            {
+                user_id: freelancerId,
+                type: "contract_completed",
+            },
+        ]);
+    });
+
+    test("freelancer cannot use the legacy route when work is submitted", async () => {
+        await createContract("work_submitted");
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(freelancerToken));
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    test("unrelated client cannot use the legacy route", async () => {
+        await createContract("work_submitted");
+        const unrelatedClientToken = jwt.sign(
+            {
+                userId: secondFreelancerId,
+                role: "client",
+            },
+            process.env.JWT_SECRET
+        );
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set(
+                "Authorization",
+                authorizationHeader(unrelatedClientToken)
+            );
+
+        expect(response.statusCode).toBe(403);
+        expect(response.body.message).toBe(
+            "Only the contract client can approve work"
+        );
     });
 
     test("missing contracts return 404", async () => {
@@ -1009,7 +1047,7 @@ describe("Contract completion API", () => {
 
         expect(response.statusCode).toBe(409);
         expect(response.body.message).toBe(
-            "Contract is already completed"
+            "Only submitted work can be approved for this contract"
         );
     });
 
@@ -1022,12 +1060,13 @@ describe("Contract completion API", () => {
 
         expect(response.statusCode).toBe(409);
         expect(response.body.message).toBe(
-            "Only active contracts can be completed"
+            "Only submitted work can be approved for this contract"
         );
     });
 
     test("completion updates the contract timestamp", async () => {
-        await createContract();
+        await createContract("work_submitted");
+        await createWorkSubmission();
         const previousTimestamp = await pool.query(
             "SELECT updated_at FROM contracts WHERE id = $1",
             [contractId]
@@ -1051,7 +1090,8 @@ describe("Contract completion API", () => {
     });
 
     test("a project update failure rolls back completion and does not notify", async () => {
-        await createContract();
+        await createContract("work_submitted");
+        await createWorkSubmission();
 
         await pool.query(
             `CREATE OR REPLACE FUNCTION project_completion_failure_test()
@@ -1090,7 +1130,7 @@ describe("Contract completion API", () => {
                 "SELECT status FROM contracts WHERE id = $1",
                 [contractId]
             );
-            expect(contractResult.rows[0].status).toBe("active");
+            expect(contractResult.rows[0].status).toBe("work_submitted");
 
             const projectResult = await pool.query(
                 "SELECT status FROM projects WHERE id = $1",
@@ -1117,22 +1157,17 @@ describe("Contract completion API", () => {
         }
     });
 
-    test("concurrent completion attempts produce one completion and one notification", async () => {
-        await createContract();
+    test("concurrent legacy route requests produce one completion and one notification", async () => {
+        await createContract("work_submitted");
+        await createWorkSubmission();
 
         const responses = await Promise.all([
             request(app)
                 .patch(`/api/contracts/${contractId}/complete`)
-                .set(
-                    "Authorization",
-                    authorizationHeader(clientToken)
-                ),
+                .set("Authorization", authorizationHeader(clientToken)),
             request(app)
                 .patch(`/api/contracts/${contractId}/complete`)
-                .set(
-                    "Authorization",
-                    authorizationHeader(freelancerToken)
-                ),
+                .set("Authorization", authorizationHeader(clientToken)),
         ]);
 
         expect(responses.map((response) => response.statusCode).sort()).toEqual(
@@ -1156,6 +1191,34 @@ describe("Contract completion API", () => {
              FROM notifications
              WHERE reference_type = 'contract'
                AND reference_id = $1`,
+            [contractId]
+        );
+        expect(notificationResult.rowCount).toBe(1);
+    });
+
+    test("concurrent approval and legacy route requests complete once and notify once", async () => {
+        await createContract("work_submitted");
+        await createWorkSubmission();
+
+        const responses = await Promise.all([
+            request(app)
+                .patch(`/api/contracts/${contractId}/approve`)
+                .set("Authorization", authorizationHeader(clientToken)),
+            request(app)
+                .patch(`/api/contracts/${contractId}/complete`)
+                .set("Authorization", authorizationHeader(clientToken)),
+        ]);
+
+        expect(responses.map((response) => response.statusCode).sort()).toEqual(
+            [200, 409]
+        );
+
+        const notificationResult = await pool.query(
+            `SELECT id
+             FROM notifications
+             WHERE reference_type = 'contract'
+               AND reference_id = $1
+               AND type = 'contract_completed'`,
             [contractId]
         );
         expect(notificationResult.rowCount).toBe(1);

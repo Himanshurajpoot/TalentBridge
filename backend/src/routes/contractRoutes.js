@@ -3,7 +3,6 @@ const express = require("express");
 const {
     getMyContracts,
     getContractById,
-    completeContract,
     submitContractWork,
     approveContractWork,
 } = require("../controllers/contractController");
@@ -61,8 +60,8 @@ router.patch(
 router.patch(
     "/:contractId/complete",
     authenticate,
-    authorize("client", "freelancer"),
-    completeContract
+    authorize("client"),
+    approveContractWork
 );
 
 router.post(

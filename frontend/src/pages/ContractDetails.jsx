@@ -127,9 +127,9 @@ function ContractDetails() {
     const [payment, setPayment] = useState(null);
     const [workSubmission, setWorkSubmission] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [completing, setCompleting] = useState(false);
-    const [completionError, setCompletionError] = useState("");
-    const [completionSuccess, setCompletionSuccess] = useState("");
+    const [approving, setApproving] = useState(false);
+    const [approvalError, setApprovalError] = useState("");
+    const [approvalSuccess, setApprovalSuccess] = useState("");
     const [creatingPaymentOrder, setCreatingPaymentOrder] =
         useState(false);
     const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -138,11 +138,10 @@ function ContractDetails() {
     const [errorStatus, setErrorStatus] = useState(null);
     const [error, setError] = useState("");
 
-    const canCompleteContract =
-        contract?.status === "active" &&
-        user?.role !== "admin" &&
-        (Number(contract?.client_id) === Number(user?.id) ||
-            Number(contract?.freelancer_id) === Number(user?.id));
+    const canApproveWork =
+        contract?.status === "work_submitted" &&
+        user?.role === "client" &&
+        Number(contract?.client_id) === Number(user?.id);
 
     const canInitiatePayment =
         contract?.status === "active" &&
@@ -196,13 +195,13 @@ function ContractDetails() {
         };
     }, [contractId]);
 
-    const handleCompleteContract = async () => {
-        if (completing) {
+    const handleApproveWork = async () => {
+        if (approving) {
             return;
         }
 
         const confirmed = window.confirm(
-            "Are you sure you want to mark this contract as completed?"
+            "Are you sure you want to approve the submitted work and complete this contract?"
         );
 
         if (!confirmed) {
@@ -210,47 +209,47 @@ function ContractDetails() {
         }
 
         try {
-            setCompleting(true);
-            setCompletionError("");
-            setCompletionSuccess("");
+            setApproving(true);
+            setApprovalError("");
+            setApprovalSuccess("");
 
             const response = await api.patch(
-                `/contracts/${contractId}/complete`
+                `/contracts/${contractId}/approve`
             );
 
             setContract((currentContract) => ({
                 ...currentContract,
                 ...response.data.data.contract,
             }));
-            setCompletionSuccess(
-                "Contract completed successfully."
+            setApprovalSuccess(
+                "Submitted work approved and contract completed."
             );
         } catch (requestError) {
             console.error(
-                "Failed to complete contract:",
+                "Failed to approve contract work:",
                 requestError
             );
 
             const status = requestError.response?.status;
             const message =
                 status === 401
-                    ? "Please sign in again to complete this contract."
+                    ? "Please sign in again to approve this work."
                     : status === 403
-                    ? "You do not have permission to complete this contract."
+                    ? "You do not have permission to approve this work."
                     : status === 404
                     ? "This contract could not be found."
                     : status === 409
-                    ? "This contract is no longer active or has already been completed."
-                    : "Failed to complete the contract. Please try again.";
+                    ? "This contract has no submitted work to approve or has already been completed."
+                    : "Failed to approve the submitted work. Please try again.";
 
-            setCompletionError(message);
+            setApprovalError(message);
 
             if (status === 404) {
                 setErrorStatus(404);
                 setContract(null);
             }
         } finally {
-            setCompleting(false);
+            setApproving(false);
         }
     };
 
@@ -474,15 +473,15 @@ function ContractDetails() {
                     </span>
                 </div>
 
-                {completionSuccess && (
+                {approvalSuccess && (
                     <div className="mt-5 rounded-lg bg-green-50 p-3 text-sm font-medium text-green-700">
-                        {completionSuccess}
+                        {approvalSuccess}
                     </div>
                 )}
 
-                {completionError && (
+                {approvalError && (
                     <div className="mt-5 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-                        {completionError}
+                        {approvalError}
                     </div>
                 )}
 
@@ -676,7 +675,7 @@ function ContractDetails() {
                     </p>
                 </section>
 
-                {(canCompleteContract || canInitiatePayment) && (
+                {(canApproveWork || canInitiatePayment) && (
                     <div className="mt-8 border-t pt-6">
                         <div className="flex flex-wrap gap-3">
                             {canInitiatePayment && (
@@ -696,16 +695,16 @@ function ContractDetails() {
                                 </button>
                             )}
 
-                            {canCompleteContract && (
+                            {canApproveWork && (
                                 <button
                                     type="button"
-                                    onClick={handleCompleteContract}
-                                    disabled={completing}
+                                    onClick={handleApproveWork}
+                                    disabled={approving}
                                     className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                    {completing
-                                        ? "Completing..."
-                                        : "Complete Contract"}
+                                    {approving
+                                        ? "Approving..."
+                                        : "Approve Work"}
                                 </button>
                             )}
                         </div>
