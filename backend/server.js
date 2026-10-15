@@ -24,12 +24,20 @@ const onlineUsers = new Map();
 const activeConversations = new Map();
 
 const PORT = process.env.PORT || 5001;
+const HOST = process.env.HOST || "0.0.0.0";
+const SOCKET_CORS_ORIGINS = (
+    process.env.SOCKET_CORS_ORIGIN ||
+    "http://localhost:5173,http://127.0.0.1:5173"
+)
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
 const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
     cors: {
-        origin: "*",
+        origin: SOCKET_CORS_ORIGINS,
     },
 });
 
@@ -993,10 +1001,10 @@ io.on("connection", (socket) => {
 if (require.main === module) {
     httpServer.listen(
         PORT,
-        "127.0.0.1",
+        HOST,
         () => {
             console.log(
-                `TalentBridge server running on http://127.0.0.1:${PORT}`
+                `TalentBridge server running on http://${HOST}:${PORT}`
             );
         }
     );
