@@ -1,3 +1,4 @@
+const jwt = require("jsonwebtoken");
 const request = require("supertest");
 
 const app = require("../src/app");
@@ -6,8 +7,12 @@ const pool = require("../src/config/db");
 describe("Projects API", () => {
     let clientToken;
     let freelancerToken;
+    let secondFreelancerToken;
+    let adminToken;
     let companyId;
     let projectId;
+    let visibilityProjectId;
+    let visibilityProposalId;
     const portfolioProjectIds = [];
 
     beforeAll(async () => {
@@ -35,6 +40,24 @@ describe("Projects API", () => {
         freelancerToken =
             freelancerLogin.body.data.token;
 
+        const secondFreelancerLogin = await request(app)
+            .post("/api/auth/login")
+            .send({
+                email: "freelancer2.test@example.com",
+                password: "TestPassword456",
+            });
+
+        expect(secondFreelancerLogin.statusCode).toBe(200);
+        secondFreelancerToken =
+            secondFreelancerLogin.body.data.token;
+        adminToken = jwt.sign(
+            {
+                userId: secondFreelancerLogin.body.data.user.id,
+                role: "admin",
+            },
+            process.env.JWT_SECRET
+        );
+
         const companyResponse = await request(app)
             .post("/api/companies")
             .set(
@@ -60,6 +83,20 @@ describe("Projects API", () => {
     });
 
     afterAll(async () => {
+        if (visibilityProposalId) {
+            await pool.query(
+                "DELETE FROM proposals WHERE id = $1",
+                [visibilityProposalId]
+            );
+        }
+
+        if (visibilityProjectId) {
+            await pool.query(
+                "DELETE FROM projects WHERE id = $1",
+                [visibilityProjectId]
+            );
+        }
+
         if (portfolioProjectIds.length > 0) {
             await pool.query(
                 "DELETE FROM proposals WHERE project_id = ANY($1::bigint[])",
@@ -322,7 +359,7 @@ describe("Projects API", () => {
         expect(response.body.success).toBe(true);
     });
 
-    test("GET /api/projects/:projectId/skills should return project skills", async () => {
+    test("GET project skills keeps open projects public", async () => {
         const response = await request(app)
             .get(
                 `/api/projects/${projectId}/skills`
@@ -335,6 +372,110 @@ describe("Projects API", () => {
         expect(
             Array.isArray(response.body.data.skills)
         ).toBe(true);
+    });
+
+    describe("GET project skills visibility for non-open projects", () => {
+        beforeAll(async () => {
+            const projectResponse = await request(app)
+                .post("/api/projects")
+                .set("Authorization", ["Bearer", clientToken].join(" "))
+                .send({
+                    companyId,
+                    title: "Restricted Skills Visibility Project",
+                    description: "Project used to verify skills visibility.",
+                });
+
+            expect(projectResponse.statusCode).toBe(201);
+            visibilityProjectId =
+                projectResponse.body.data.project.id;
+
+            const proposalResponse = await request(app)
+                .post(
+                    `/api/projects/${visibilityProjectId}/proposals`
+                )
+                .set(
+                    "Authorization",
+                    ["Bearer", freelancerToken].join(" ")
+                )
+                .send({
+                    coverLetter: "Proposal for restricted skills test.",
+                    proposedBudget: 70000,
+                    estimatedDays: 30,
+                });
+
+            expect(proposalResponse.statusCode).toBe(201);
+            visibilityProposalId =
+                proposalResponse.body.data.proposal.id;
+
+            await pool.query(
+                `UPDATE proposals
+                 SET status = 'accepted'
+                 WHERE id = $1`,
+                [visibilityProposalId]
+            );
+            await pool.query(
+                `UPDATE projects
+                 SET status = 'in_progress'
+                 WHERE id = $1`,
+                [visibilityProjectId]
+            );
+        });
+
+        test("denies unauthenticated access", async () => {
+            const response = await request(app)
+                .get(`/api/projects/${visibilityProjectId}/skills`);
+
+            expect(response.statusCode).toBe(401);
+            expect(response.body).toEqual({
+                success: false,
+                message: "Authentication required",
+            });
+        });
+
+        test("denies an unrelated authenticated user", async () => {
+            const response = await request(app)
+                .get(`/api/projects/${visibilityProjectId}/skills`)
+                .set(
+                    "Authorization",
+                    ["Bearer", secondFreelancerToken].join(" ")
+                );
+
+            expect(response.statusCode).toBe(403);
+            expect(response.body).toEqual({
+                success: false,
+                message: "You do not have access to this project",
+            });
+        });
+
+        test("allows the project owner", async () => {
+            const response = await request(app)
+                .get(`/api/projects/${visibilityProjectId}/skills`)
+                .set("Authorization", ["Bearer", clientToken].join(" "));
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body.success).toBe(true);
+            expect(Array.isArray(response.body.data.skills)).toBe(true);
+        });
+
+        test("allows the accepted freelancer", async () => {
+            const response = await request(app)
+                .get(`/api/projects/${visibilityProjectId}/skills`)
+                .set("Authorization", ["Bearer", freelancerToken].join(" "));
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body.success).toBe(true);
+            expect(Array.isArray(response.body.data.skills)).toBe(true);
+        });
+
+        test("allows an admin", async () => {
+            const response = await request(app)
+                .get(`/api/projects/${visibilityProjectId}/skills`)
+                .set("Authorization", ["Bearer", adminToken].join(" "));
+
+            expect(response.statusCode).toBe(200);
+            expect(response.body.success).toBe(true);
+            expect(Array.isArray(response.body.data.skills)).toBe(true);
+        });
     });
 
     test("POST /api/projects/:projectId/skills should reject missing skill ID", async () => {

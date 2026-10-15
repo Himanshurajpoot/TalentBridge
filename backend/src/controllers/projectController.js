@@ -1,6 +1,15 @@
 const pool = require("../config/db");
 const { createNotification } = require("../services/notificationService");
 
+const canViewProject = (project, user) =>
+    project.status === "open" ||
+    Boolean(
+        user &&
+            (user.role === "admin" ||
+                project.client_id === user.id ||
+                project.is_accepted_freelancer),
+    );
+
 const createProject = async (req, res) => {
     try {
         const {
@@ -283,13 +292,7 @@ const getProjectById = async (req, res) => {
 
         const project = result.rows[0];
 
-        const canView =
-            project.status === "open" ||
-            req.user.role === "admin" ||
-            project.client_id === req.user.id ||
-            project.is_accepted_freelancer;
-
-        if (!canView) {
+        if (!canViewProject(project, req.user)) {
             return res.status(403).json({
                 success: false,
                 message: "You do not have access to this project",
@@ -401,16 +404,42 @@ const getProjectSkills = async (req, res) => {
         const { projectId } = req.params;
 
         const projectResult = await pool.query(
-            `SELECT id
-             FROM projects
-             WHERE id = $1`,
-            [projectId]
+            `SELECT
+                p.id,
+                p.status,
+                p.client_id,
+                EXISTS (
+                    SELECT 1
+                    FROM proposals pr
+                    WHERE pr.project_id = p.id
+                      AND pr.freelancer_id = $2
+                      AND pr.status = 'accepted'
+                ) AS is_accepted_freelancer
+             FROM projects p
+             WHERE p.id = $1`,
+            [projectId, req.user?.id ?? null]
         );
 
         if (projectResult.rowCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
+            });
+        }
+
+        const project = projectResult.rows[0];
+
+        if (project.status !== "open" && !req.user) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required",
+            });
+        }
+
+        if (!canViewProject(project, req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "You do not have access to this project",
             });
         }
 

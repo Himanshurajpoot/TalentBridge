@@ -16,6 +16,14 @@ const authorize = require("../middleware/authorize");
 
 const router = express.Router();
 
+const authenticateIfProvided = (req, res, next) => {
+    if (!req.headers.authorization) {
+        return next();
+    }
+
+    return authenticate(req, res, next);
+};
+
 router.get(
     "/",
     getProjects
@@ -50,6 +58,7 @@ router.post(
 
 router.get(
     "/:projectId/skills",
+    authenticateIfProvided,
     getProjectSkills
 );
 
