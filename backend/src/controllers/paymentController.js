@@ -199,6 +199,29 @@ const createContractPaymentOrder = async (req, res) => {
             });
         }
 
+        const contractPaymentsResult = await client.query(
+            `SELECT id, status
+             FROM contract_payments
+             WHERE contract_id = $1
+               AND provider = $2
+             ORDER BY id
+             FOR UPDATE`,
+            [contract.id, PAYMENT_PROVIDER],
+        );
+
+        if (
+            contractPaymentsResult.rows.some(
+                (contractPayment) => contractPayment.status === "funded",
+            )
+        ) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({
+                success: false,
+                message:
+                    "This contract is already funded and cannot accept another payment",
+            });
+        }
+
         const reusablePaymentResult = await client.query(
             `SELECT
                 id,

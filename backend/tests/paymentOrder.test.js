@@ -77,6 +77,25 @@ const createFakeClient = () => {
                 };
             }
 
+            if (query.startsWith("SELECT id, status FROM contract_payments")) {
+                const payments = [...databaseState.payments.values()]
+                    .filter(
+                        (item) =>
+                            String(item.contract_id) === String(params[0]) &&
+                            item.provider === params[1],
+                    )
+                    .sort((first, second) => Number(first.id) - Number(second.id));
+
+                for (const payment of payments) {
+                    await acquireLock(`payment:${payment.id}`, client);
+                }
+
+                return {
+                    rowCount: payments.length,
+                    rows: payments.map(({ id, status }) => ({ id, status })),
+                };
+            }
+
             if (query.startsWith("SELECT id, contract_id, client_id, amount, currency, provider, provider_order_reference, status FROM contract_payments")) {
                 const payments = [...databaseState.payments.values()]
                     .filter(
@@ -478,6 +497,50 @@ describe("Contract payment order creation", () => {
         expect(repeatedResponse.statusCode).toBe(200);
         expect(repeatedResponse.body.data).toEqual(firstResponse.body.data);
         expect(createRazorpayOrder).toHaveBeenCalledTimes(1);
+        expect(databaseState.payments.size).toBe(1);
+    });
+
+    test("rejects a fresh idempotency key when the contract already has a funded payment", async () => {
+        seedContract({ id: 118 });
+        seedPayment({
+            id: 18,
+            contractId: 118,
+            status: "funded",
+            idempotencyKey: "funded-request-118",
+        });
+
+        const response = await invokeController(118, "fresh-after-funding-118");
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "This contract is already funded and cannot accept another payment",
+        );
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
+        expect(databaseState.payments.size).toBe(1);
+        expect(databaseState.payments.has("18")).toBe(true);
+    });
+
+    test("preserves same-key order reuse when that payment is funded", async () => {
+        seedContract({ id: 119 });
+        seedPayment({
+            id: 19,
+            contractId: 119,
+            status: "funded",
+            idempotencyKey: "funded-request-119",
+            orderReference: "order_funded_119",
+        });
+
+        const response = await invokeController(119, "funded-request-119");
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.data).toEqual({
+            paymentId: "19",
+            razorpayOrderId: "order_funded_119",
+            amount: 123456,
+            currency: "INR",
+            keyId: "rzp_test_public",
+        });
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
         expect(databaseState.payments.size).toBe(1);
     });
 
