@@ -1,19 +1,43 @@
 const crypto = require("node:crypto");
 const Razorpay = require("razorpay");
 
+const getRazorpayConfig = () => {
+    const mode = (process.env.RAZORPAY_MODE || "test").trim().toLowerCase();
+    const keyId = process.env.RAZORPAY_KEY_ID?.trim();
+    const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET?.trim();
+
+    if (!["test", "live"].includes(mode)) {
+        throw new Error("Invalid Razorpay mode");
+    }
+
+    const expectedKeyPrefix = mode === "live" ? "rzp_live_" : "rzp_test_";
+
+    if (!keyId?.startsWith(expectedKeyPrefix) || !keySecret) {
+        throw new Error(
+            `Razorpay ${mode}-mode credentials are not configured`,
+        );
+    }
+
+    return {
+        mode,
+        keyId,
+        keySecret,
+        webhookSecret,
+    };
+};
+
 const verifyRazorpayPaymentSignature = ({
     orderId,
     paymentId,
     signature,
 }) => {
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    const { keySecret } = getRazorpayConfig();
 
-    if (!keyId?.startsWith("rzp_test_") || !keySecret?.trim()) {
-        throw new Error("Razorpay test credentials are not configured");
-    }
-
-    if (!/^[a-f0-9]{64}$/i.test(signature)) {
+    if (
+        typeof signature !== "string" ||
+        !/^[a-f0-9]{64}$/i.test(signature)
+    ) {
         return false;
     }
 
@@ -21,6 +45,7 @@ const verifyRazorpayPaymentSignature = ({
         .createHmac("sha256", keySecret)
         .update(`${orderId}|${paymentId}`)
         .digest();
+
     const receivedSignature = Buffer.from(signature, "hex");
 
     return (
@@ -38,17 +63,19 @@ const verifyRazorpayWebhookSignature = (rawBody, signature) => {
         return false;
     }
 
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const { webhookSecret, mode } = getRazorpayConfig();
 
-    if (!keyId?.startsWith("rzp_test_") || !webhookSecret?.trim()) {
-        throw new Error("Razorpay test credentials are not configured");
+    if (!webhookSecret) {
+        throw new Error(
+            `Razorpay ${mode}-mode webhook secret is not configured`,
+        );
     }
 
     const expectedSignature = crypto
         .createHmac("sha256", webhookSecret)
         .update(rawBody)
         .digest();
+
     const receivedSignature = Buffer.from(signature, "hex");
 
     return (
@@ -58,12 +85,7 @@ const verifyRazorpayWebhookSignature = (rawBody, signature) => {
 };
 
 const createRazorpayOrder = async (order) => {
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
-
-    if (!keyId?.startsWith("rzp_test_") || !keySecret?.trim()) {
-        throw new Error("Razorpay test credentials are not configured");
-    }
+    const { keyId, keySecret } = getRazorpayConfig();
 
     const razorpay = new Razorpay({
         key_id: keyId,
@@ -77,4 +99,5 @@ module.exports = {
     createRazorpayOrder,
     verifyRazorpayPaymentSignature,
     verifyRazorpayWebhookSignature,
+    getRazorpayConfig,
 };
