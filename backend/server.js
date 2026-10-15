@@ -55,10 +55,20 @@ io.use((socket, next) => {
             process.env.JWT_SECRET
         );
 
+        if (
+            !Number.isFinite(decoded.exp) ||
+            decoded.exp * 1000 <= Date.now()
+        ) {
+            return next(
+                new Error("Invalid or expired token")
+            );
+        }
+
         socket.user = {
             id: decoded.userId,
             role: decoded.role,
         };
+        socket.data.jwtExpiresAt = decoded.exp * 1000;
 
         next();
     } catch (error) {
@@ -72,6 +82,19 @@ io.use((socket, next) => {
  * Socket connection
  */
 io.on("connection", (socket) => {
+    const expiryDelay =
+        socket.data.jwtExpiresAt - Date.now();
+
+    if (expiryDelay <= 0) {
+        socket.disconnect(true);
+        return;
+    }
+
+    socket.data.authExpiryTimer = setTimeout(
+        () => socket.disconnect(true),
+        expiryDelay
+    );
+
     console.log(
         `Socket connected: ${socket.id} | User: ${socket.user.id} | Role: ${socket.user.role}`
     );
@@ -913,6 +936,11 @@ io.on("connection", (socket) => {
      * =========================================================
      */
     socket.on("disconnect", () => {
+        if (socket.data.authExpiryTimer) {
+            clearTimeout(socket.data.authExpiryTimer);
+            socket.data.authExpiryTimer = null;
+        }
+
         const userId = socket.user.id;
 
         /*
@@ -962,15 +990,17 @@ io.on("connection", (socket) => {
  * START SERVER
  * =========================================================
  */
-httpServer.listen(
-    PORT,
-    "127.0.0.1",
-    () => {
-        console.log(
-            `TalentBridge server running on http://127.0.0.1:${PORT}`
-        );
-    }
-);
+if (require.main === module) {
+    httpServer.listen(
+        PORT,
+        "127.0.0.1",
+        () => {
+            console.log(
+                `TalentBridge server running on http://127.0.0.1:${PORT}`
+            );
+        }
+    );
+}
 
 httpServer.on("error", (error) => {
     console.error(
@@ -978,3 +1008,8 @@ httpServer.on("error", (error) => {
         error
     );
 });
+
+module.exports = {
+    httpServer,
+    io,
+};
