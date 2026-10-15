@@ -1,7 +1,55 @@
+const { randomUUID } = require("crypto");
 const request = require("supertest");
 const app = require("../src/app");
+const pool = require("../src/config/db");
 
 describe("Authentication API", () => {
+    test("POST /api/auth/register should reject admin role and default to client", async () => {
+        const email = `auth-admin-role-${randomUUID()}@example.com`;
+
+        try {
+            const adminRegistration = await request(app)
+                .post("/api/auth/register")
+                .send({
+                    fullName: "Registration Role Test",
+                    email,
+                    password: "TestPassword123",
+                    role: "admin",
+                });
+
+            expect(adminRegistration.statusCode).toBe(400);
+            expect(adminRegistration.body.success).toBe(false);
+
+            const afterRejectedRegistration = await pool.query(
+                "SELECT id FROM users WHERE email = $1",
+                [email]
+            );
+            expect(afterRejectedRegistration.rows).toHaveLength(0);
+
+            const defaultRegistration = await request(app)
+                .post("/api/auth/register")
+                .send({
+                    fullName: "Registration Role Test",
+                    email,
+                    password: "TestPassword123",
+                });
+
+            expect(defaultRegistration.statusCode).toBe(201);
+            expect(defaultRegistration.body.data.user.role).toBe("client");
+
+            const createdUser = await pool.query(
+                "SELECT role FROM users WHERE email = $1",
+                [email]
+            );
+            expect(createdUser.rows).toEqual([{ role: "client" }]);
+        } finally {
+            await pool.query(
+                "DELETE FROM users WHERE email = $1",
+                [email]
+            );
+        }
+    });
+
     test("POST /api/auth/login should login with valid credentials", async () => {
         const response = await request(app)
             .post("/api/auth/login")
