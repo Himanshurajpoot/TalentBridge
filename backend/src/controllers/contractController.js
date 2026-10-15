@@ -336,18 +336,7 @@ const submitContractWork = async (req, res) => {
     }
 };
 
-const approveContractWork = async (req, res) => {
-    const { contractId } = req.params;
-
-    if (
-        !/^[1-9]\d*$/.test(contractId) ||
-        BigInt(contractId) > 9223372036854775807n
-    ) {
-        return res.status(400).json({
-            success: false,
-            message: "Invalid contract ID",
-        });
-    }
+const approveWork = async (req, res, resolveContract) => {
 
     let client;
     let transactionCommitted = false;
@@ -356,25 +345,23 @@ const approveContractWork = async (req, res) => {
         client = await pool.connect();
         await client.query("BEGIN");
 
-        const contractResult = await client.query(
-            `SELECT
-                id,
-                project_id,
-                client_id,
-                freelancer_id,
-                status
-             FROM contracts
-             WHERE id = $1
-             FOR UPDATE`,
-            [contractId],
-        );
+        const contractResult = await resolveContract(client);
 
         if (contractResult.rowCount === 0) {
             await client.query("ROLLBACK");
 
             return res.status(404).json({
                 success: false,
-                message: "Contract not found",
+                message: contractResult.message || "Contract not found",
+            });
+        }
+
+        if (contractResult.rowCount !== 1) {
+            await client.query("ROLLBACK");
+
+            return res.status(409).json({
+                success: false,
+                message: "Project does not have a unique contract",
             });
         }
 
@@ -416,7 +403,7 @@ const approveContractWork = async (req, res) => {
              WHERE id = $1
                AND status = 'work_submitted'
              RETURNING *`,
-            [contractId],
+            [contract.id],
         );
 
         if (contractUpdateResult.rowCount !== 1) {
@@ -434,7 +421,7 @@ const approveContractWork = async (req, res) => {
              SET status = 'completed',
                  updated_at = NOW()
              WHERE id = $1
-             RETURNING id, status`,
+             RETURNING *`,
             [contract.project_id],
         );
 
@@ -469,6 +456,9 @@ const approveContractWork = async (req, res) => {
             message: "Contract work approved successfully",
             data: {
                 contract: contractUpdateResult.rows[0],
+                ...(contractResult.includeProject
+                    ? { project: projectResult.rows[0] }
+                    : {}),
             },
         });
     } catch (error) {
@@ -494,9 +484,81 @@ const approveContractWork = async (req, res) => {
     }
 };
 
+const approveContractWork = async (req, res) => {
+    const { contractId } = req.params;
+
+    if (
+        !/^[1-9]\d*$/.test(contractId) ||
+        BigInt(contractId) > 9223372036854775807n
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid contract ID",
+        });
+    }
+
+    return approveWork(req, res, (client) =>
+        client.query(
+            `SELECT
+                id,
+                project_id,
+                client_id,
+                freelancer_id,
+                status
+             FROM contracts
+             WHERE id = $1
+             FOR UPDATE`,
+            [contractId],
+        ),
+    );
+};
+
+const approveProjectWork = async (req, res) => {
+    const { projectId } = req.params;
+
+    if (
+        !/^[1-9]\d*$/.test(projectId) ||
+        BigInt(projectId) > 9223372036854775807n
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid project ID",
+        });
+    }
+
+    const response = await approveWork(req, res, async (client) => {
+        const contractResult = await client.query(
+            `SELECT
+                id,
+                project_id,
+                client_id,
+                freelancer_id,
+                status
+             FROM contracts
+             WHERE project_id = $1
+             ORDER BY id
+             LIMIT 2
+             FOR UPDATE`,
+            [projectId],
+        );
+
+        if (contractResult.rowCount !== 1) {
+            return contractResult;
+        }
+
+        return {
+            ...contractResult,
+            includeProject: true,
+        };
+    });
+
+    return response;
+};
+
 module.exports = {
     getMyContracts,
     getContractById,
     submitContractWork,
     approveContractWork,
+    approveProjectWork,
 };

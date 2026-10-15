@@ -65,7 +65,7 @@ router.get(
 router.patch(
     "/:projectId/complete",
     authenticate,
-    authorize("client", "admin"),
+    authorize("client"),
     completeProject
 );
 

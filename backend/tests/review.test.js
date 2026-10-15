@@ -11,6 +11,7 @@ describe("Reviews API", () => {
     let companyId;
     let projectId;
     let proposalId;
+    let contractId;
 
     let clientReviewId;
     let freelancerReviewId;
@@ -142,6 +143,49 @@ describe("Reviews API", () => {
             acceptResponse.body.data.project.status
         ).toBe("in_progress");
 
+        const contractResult = await pool.query(
+            `SELECT id
+             FROM contracts
+             WHERE proposal_id = $1`,
+            [proposalId]
+        );
+        contractId = contractResult.rows[0].id;
+
+        await pool.query(
+            `INSERT INTO contract_payments (
+                contract_id,
+                client_id,
+                freelancer_id,
+                amount,
+                agreed_amount_snapshot,
+                currency,
+                provider,
+                provider_order_reference,
+                provider_payment_reference,
+                idempotency_key,
+                status
+             )
+             VALUES ($1, 3, 2, 60000, 60000, 'INR', 'razorpay',
+                     $2, $3, $4, 'funded')`,
+            [
+                contractId,
+                `review-order-${contractId}`,
+                `review-payment-${contractId}`,
+                `review-contract-payment-${contractId}`,
+            ]
+        );
+
+        const submissionResponse = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set(
+                "Authorization",
+                ["Bearer", freelancerToken].join(" ")
+            )
+            .send({
+                message: "Completed work for the review test project.",
+            });
+        expect(submissionResponse.statusCode).toBe(201);
+
         const completeResponse = await request(app)
             .patch(
                 `/api/projects/${projectId}/complete`
@@ -188,6 +232,31 @@ describe("Reviews API", () => {
         }
 
         if (proposalId) {
+            if (contractId) {
+                await pool.query(
+                    `DELETE FROM notifications
+                     WHERE reference_type = 'contract'
+                       AND reference_id = $1`,
+                    [contractId]
+                );
+                await pool.query(
+                    `DELETE FROM contract_payment_events
+                     WHERE contract_payment_id IN (
+                         SELECT id FROM contract_payments
+                         WHERE contract_id = $1
+                     )`,
+                    [contractId]
+                );
+                await pool.query(
+                    "DELETE FROM contract_payments WHERE contract_id = $1",
+                    [contractId]
+                );
+                await pool.query(
+                    "DELETE FROM contract_work_submissions WHERE contract_id = $1",
+                    [contractId]
+                );
+            }
+
             await pool.query(
                 "DELETE FROM contracts WHERE proposal_id = $1",
                 [proposalId]

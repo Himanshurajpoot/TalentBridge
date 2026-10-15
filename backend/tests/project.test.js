@@ -9,11 +9,16 @@ describe("Projects API", () => {
     let freelancerToken;
     let secondFreelancerToken;
     let adminToken;
+    let clientId;
+    let freelancerId;
+    let secondFreelancerId;
     let companyId;
     let projectId;
     let visibilityProjectId;
     let visibilityProposalId;
     const portfolioProjectIds = [];
+    const completionFixtures = [];
+    const noContractProjectIds = [];
 
     beforeAll(async () => {
         const clientLogin = await request(app)
@@ -27,6 +32,7 @@ describe("Projects API", () => {
 
         clientToken =
             clientLogin.body.data.token;
+        clientId = clientLogin.body.data.user.id;
 
         const freelancerLogin = await request(app)
             .post("/api/auth/login")
@@ -39,6 +45,7 @@ describe("Projects API", () => {
 
         freelancerToken =
             freelancerLogin.body.data.token;
+        freelancerId = freelancerLogin.body.data.user.id;
 
         const secondFreelancerLogin = await request(app)
             .post("/api/auth/login")
@@ -50,6 +57,7 @@ describe("Projects API", () => {
         expect(secondFreelancerLogin.statusCode).toBe(200);
         secondFreelancerToken =
             secondFreelancerLogin.body.data.token;
+        secondFreelancerId = secondFreelancerLogin.body.data.user.id;
         adminToken = jwt.sign(
             {
                 userId: secondFreelancerLogin.body.data.user.id,
@@ -82,7 +90,159 @@ describe("Projects API", () => {
         );
     });
 
+    const createCompletionFixture = async ({
+        paymentStatus = null,
+        contractStatus = "active",
+        submitted = false,
+    } = {}) => {
+        const projectResult = await pool.query(
+            `INSERT INTO projects (client_id, title, description, status)
+             VALUES ($1, $2, $3, 'in_progress')
+             RETURNING id`,
+            [
+                clientId,
+                "Project completion alias test",
+                "Project completion alias fixture.",
+            ]
+        );
+        const fixtureProjectId = projectResult.rows[0].id;
+
+        const proposalResult = await pool.query(
+            `INSERT INTO proposals (
+                project_id,
+                freelancer_id,
+                cover_letter,
+                proposed_budget,
+                estimated_days,
+                status
+             )
+             VALUES ($1, $2, $3, 55000, 20, 'accepted')
+             RETURNING id`,
+            [
+                fixtureProjectId,
+                freelancerId,
+                "Proposal for project completion alias test.",
+            ]
+        );
+        const fixtureProposalId = proposalResult.rows[0].id;
+
+        const contractResult = await pool.query(
+            `INSERT INTO contracts (
+                proposal_id,
+                project_id,
+                client_id,
+                freelancer_id,
+                agreed_amount,
+                terms,
+                status
+             )
+             VALUES ($1, $2, $3, $4, 55000, $5, $6)
+             RETURNING id`,
+            [
+                fixtureProposalId,
+                fixtureProjectId,
+                clientId,
+                freelancerId,
+                "Contract for project completion alias test.",
+                contractStatus,
+            ]
+        );
+        const fixtureContractId = contractResult.rows[0].id;
+
+        if (paymentStatus) {
+            await pool.query(
+                `INSERT INTO contract_payments (
+                    contract_id,
+                    client_id,
+                    freelancer_id,
+                    amount,
+                    agreed_amount_snapshot,
+                    currency,
+                    provider,
+                    provider_order_reference,
+                    idempotency_key,
+                    status
+                 )
+                 VALUES ($1, $2, $3, 55000, 55000, 'INR', 'razorpay',
+                         $4, $5, $6)`,
+                [
+                    fixtureContractId,
+                    clientId,
+                    freelancerId,
+                    `order-project-alias-${fixtureContractId}`,
+                    `payment-project-alias-${fixtureContractId}`,
+                    paymentStatus,
+                ]
+            );
+        }
+
+        if (submitted) {
+            await pool.query(
+                `INSERT INTO contract_work_submissions (
+                    contract_id, freelancer_id, message
+                 )
+                 VALUES ($1, $2, $3)`,
+                [
+                    fixtureContractId,
+                    freelancerId,
+                    "Submitted work for project alias test.",
+                ]
+            );
+        }
+
+        const fixture = {
+            projectId: fixtureProjectId,
+            proposalId: fixtureProposalId,
+            contractId: fixtureContractId,
+        };
+        completionFixtures.push(fixture);
+        return fixture;
+    };
+
     afterAll(async () => {
+        for (const fixture of completionFixtures) {
+            await pool.query(
+                `DELETE FROM notifications
+                 WHERE reference_type = 'contract'
+                   AND reference_id = $1`,
+                [fixture.contractId]
+            );
+            await pool.query(
+                `DELETE FROM contract_payment_events
+                 WHERE contract_payment_id IN (
+                     SELECT id FROM contract_payments WHERE contract_id = $1
+                 )`,
+                [fixture.contractId]
+            );
+            await pool.query(
+                "DELETE FROM contract_payments WHERE contract_id = $1",
+                [fixture.contractId]
+            );
+            await pool.query(
+                "DELETE FROM contract_work_submissions WHERE contract_id = $1",
+                [fixture.contractId]
+            );
+            await pool.query(
+                "DELETE FROM contracts WHERE id = $1",
+                [fixture.contractId]
+            );
+            await pool.query(
+                "DELETE FROM proposals WHERE id = $1",
+                [fixture.proposalId]
+            );
+            await pool.query(
+                "DELETE FROM projects WHERE id = $1",
+                [fixture.projectId]
+            );
+        }
+
+        if (noContractProjectIds.length > 0) {
+            await pool.query(
+                "DELETE FROM projects WHERE id = ANY($1::bigint[])",
+                [noContractProjectIds]
+            );
+        }
+
         if (visibilityProposalId) {
             await pool.query(
                 "DELETE FROM proposals WHERE id = $1",
@@ -497,7 +657,7 @@ describe("Projects API", () => {
         });
     });
 
-    test("PATCH /api/projects/:projectId/complete should reject project that is not in progress", async () => {
+    test("PATCH /api/projects/:projectId/complete rejects projects without a contract", async () => {
         const response = await request(app)
             .patch(
                 `/api/projects/${projectId}/complete`
@@ -507,13 +667,182 @@ describe("Projects API", () => {
                 `Bearer ${clientToken}`
             );
 
-        expect(response.statusCode).toBe(400);
+        expect(response.statusCode).toBe(404);
+        expect(response.body.success).toBe(false);
+    });
 
-        expect(response.body).toEqual({
-            success: false,
-            message:
-                "Only in-progress projects can be completed",
+    test.each([
+        ["no payment", null],
+        ["funding_pending payment", "funding_pending"],
+    ])(
+        "project completion alias rejects submitted work with %s",
+        async (_label, paymentStatus) => {
+            const fixture = await createCompletionFixture({
+                paymentStatus,
+                contractStatus: "work_submitted",
+                submitted: true,
+            });
+
+            const response = await request(app)
+                .patch(`/api/projects/${fixture.projectId}/complete`)
+                .set("Authorization", ["Bearer", clientToken].join(" "));
+
+            expect(response.statusCode).toBe(409);
+
+            const [contractResult, projectResult] = await Promise.all([
+                pool.query(
+                    "SELECT status FROM contracts WHERE id = $1",
+                    [fixture.contractId]
+                ),
+                pool.query(
+                    "SELECT status FROM projects WHERE id = $1",
+                    [fixture.projectId]
+                ),
+            ]);
+            expect(contractResult.rows[0].status).toBe("work_submitted");
+            expect(projectResult.rows[0].status).toBe("in_progress");
+        }
+    );
+
+    test("project completion alias rejects a funded contract without submitted work", async () => {
+        const fixture = await createCompletionFixture({
+            paymentStatus: "funded",
         });
+
+        const response = await request(app)
+            .patch(`/api/projects/${fixture.projectId}/complete`)
+            .set("Authorization", ["Bearer", clientToken].join(" "));
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Only submitted work can be approved for this contract"
+        );
+
+        const [contractResult, projectResult] = await Promise.all([
+            pool.query("SELECT status FROM contracts WHERE id = $1", [
+                fixture.contractId,
+            ]),
+            pool.query("SELECT status FROM projects WHERE id = $1", [
+                fixture.projectId,
+            ]),
+        ]);
+        expect(contractResult.rows[0].status).toBe("active");
+        expect(projectResult.rows[0].status).toBe("in_progress");
+    });
+
+    test("project completion alias requires the owning client", async () => {
+        const fixture = await createCompletionFixture({
+            paymentStatus: "funded",
+            contractStatus: "work_submitted",
+            submitted: true,
+        });
+        const otherClientToken = jwt.sign(
+            {
+                userId: secondFreelancerId,
+                role: "client",
+            },
+            process.env.JWT_SECRET
+        );
+
+        const response = await request(app)
+            .patch(`/api/projects/${fixture.projectId}/complete`)
+            .set("Authorization", ["Bearer", otherClientToken].join(" "));
+
+        expect(response.statusCode).toBe(403);
+        expect(response.body.message).toBe(
+            "Only the contract client can approve work"
+        );
+    });
+
+    test.each([
+        ["freelancer", () => freelancerToken, 403],
+        ["admin", () => adminToken, 403],
+    ])(
+        "project completion alias rejects a %s",
+        async (_role, tokenFactory, expectedStatus) => {
+            const fixture = await createCompletionFixture({
+                paymentStatus: "funded",
+                contractStatus: "work_submitted",
+                submitted: true,
+            });
+
+            const response = await request(app)
+                .patch(`/api/projects/${fixture.projectId}/complete`)
+                .set(
+                    "Authorization",
+                    ["Bearer", tokenFactory()].join(" ")
+                );
+
+            expect(response.statusCode).toBe(expectedStatus);
+        }
+    );
+
+    test("project completion alias rejects a project without an associated contract", async () => {
+        const result = await pool.query(
+            `INSERT INTO projects (client_id, title, description, status)
+             VALUES ($1, $2, $3, 'in_progress')
+             RETURNING id`,
+            [clientId, "Project without contract", "No contract fixture."]
+        );
+        const noContractProjectId = result.rows[0].id;
+        noContractProjectIds.push(noContractProjectId);
+
+        const response = await request(app)
+            .patch(`/api/projects/${noContractProjectId}/complete`)
+            .set("Authorization", ["Bearer", clientToken].join(" "));
+
+        expect(response.statusCode).toBe(404);
+        expect(response.body.success).toBe(false);
+    });
+
+    test("project completion alias delegates to funded contract approval and notifies once", async () => {
+        const fixture = await createCompletionFixture({
+            paymentStatus: "funded",
+            contractStatus: "work_submitted",
+            submitted: true,
+        });
+
+        const response = await request(app)
+            .patch(`/api/projects/${fixture.projectId}/complete`)
+            .set("Authorization", ["Bearer", clientToken].join(" "));
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toMatchObject({
+            success: true,
+            message: "Contract work approved successfully",
+            data: {
+                contract: {
+                    id: fixture.contractId,
+                    status: "completed",
+                },
+                project: {
+                    id: fixture.projectId,
+                    status: "completed",
+                },
+            },
+        });
+
+        const [contractResult, projectResult, notificationResult] =
+            await Promise.all([
+                pool.query("SELECT status FROM contracts WHERE id = $1", [
+                    fixture.contractId,
+                ]),
+                pool.query("SELECT status FROM projects WHERE id = $1", [
+                    fixture.projectId,
+                ]),
+                pool.query(
+                    `SELECT type
+                     FROM notifications
+                     WHERE reference_type = 'contract'
+                       AND reference_id = $1`,
+                    [fixture.contractId]
+                ),
+            ]);
+        expect(contractResult.rows[0].status).toBe("completed");
+        expect(projectResult.rows[0].status).toBe("completed");
+        expect(notificationResult.rows).toEqual([
+            { type: "contract_completed" },
+        ]);
     });
 
     test("GET /api/projects/user/:userId/portfolio should require authentication", async () => {

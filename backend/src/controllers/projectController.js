@@ -1,5 +1,5 @@
 const pool = require("../config/db");
-const { createNotification } = require("../services/notificationService");
+const { approveProjectWork } = require("./contractController");
 
 const canViewProject = (project, user) =>
     project.status === "open" ||
@@ -592,130 +592,7 @@ const getUserPortfolioProjects = async (req, res) => {
     }
 };
 
-const completeProject = async (req, res) => {
-    const client = await pool.connect();
-
-    try {
-        const { projectId } = req.params;
-
-        await client.query("BEGIN");
-
-        const projectResult = await client.query(
-            `SELECT
-                id,
-                client_id,
-                status
-             FROM projects
-             WHERE id = $1
-             FOR UPDATE`,
-            [projectId]
-        );
-
-        if (projectResult.rowCount === 0) {
-            await client.query("ROLLBACK");
-
-            return res.status(404).json({
-                success: false,
-                message: "Project not found",
-            });
-        }
-
-        const project = projectResult.rows[0];
-
-        if (
-            req.user.role !== "admin" &&
-            project.client_id !== req.user.id
-        ) {
-            await client.query("ROLLBACK");
-
-            return res.status(403).json({
-                success: false,
-                message: "You can only complete your own projects",
-            });
-        }
-
-        if (project.status === "completed") {
-            await client.query("ROLLBACK");
-
-            return res.status(200).json({
-                success: true,
-                message: "Project is already completed",
-            });
-        }
-
-        if (project.status !== "in_progress") {
-            await client.query("ROLLBACK");
-
-            return res.status(400).json({
-                success: false,
-                message: "Only in-progress projects can be completed",
-            });
-        }
-
-        const acceptedProposalResult = await client.query(
-            `SELECT
-                id,
-                freelancer_id
-             FROM proposals
-             WHERE project_id = $1
-               AND status = 'accepted'
-             LIMIT 1`,
-            [projectId]
-        );
-
-        if (acceptedProposalResult.rowCount === 0) {
-            await client.query("ROLLBACK");
-
-            return res.status(400).json({
-                success: false,
-                message: "Project does not have an accepted proposal",
-            });
-        }
-
-        const freelancerId =
-            acceptedProposalResult.rows[0].freelancer_id;
-
-        const result = await client.query(
-            `UPDATE projects
-             SET status = 'completed',
-                 updated_at = NOW()
-             WHERE id = $1
-             RETURNING *`,
-            [projectId]
-        );
-
-        await client.query("COMMIT");
-
-        await createNotification({
-            userId: freelancerId,
-            type: "project_completed",
-            title: "Project Completed",
-            message:
-                "A project you were hired for has been marked as completed.",
-            referenceType: "project",
-            referenceId: projectId,
-        });
-
-        return res.status(200).json({
-            success: true,
-            message: "Project marked as completed successfully",
-            data: {
-                project: result.rows[0],
-            },
-        });
-    } catch (error) {
-        await client.query("ROLLBACK");
-
-        console.error("Complete project error:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Internal server error",
-        });
-    } finally {
-        client.release();
-    }
-};
+const completeProject = approveProjectWork;
 
 module.exports = {
     createProject,

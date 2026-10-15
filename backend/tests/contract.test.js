@@ -1469,4 +1469,45 @@ describe("Contract completion API", () => {
         );
         expect(notificationResult.rowCount).toBe(1);
     });
+
+    test("concurrent project alias and contract approval complete once and notify once", async () => {
+        await createContract("work_submitted");
+        await createWorkSubmission();
+        await createContractPayment();
+
+        const responses = await Promise.all([
+            request(app)
+                .patch(`/api/projects/${projectId}/complete`)
+                .set("Authorization", authorizationHeader(clientToken)),
+            request(app)
+                .patch(`/api/contracts/${contractId}/approve`)
+                .set("Authorization", authorizationHeader(clientToken)),
+        ]);
+
+        expect(responses.map((response) => response.statusCode).sort()).toEqual(
+            [200, 409]
+        );
+
+        const [contractResult, projectResult, notificationResult] =
+            await Promise.all([
+                pool.query("SELECT status FROM contracts WHERE id = $1", [
+                    contractId,
+                ]),
+                pool.query("SELECT status FROM projects WHERE id = $1", [
+                    projectId,
+                ]),
+                pool.query(
+                    `SELECT id
+                     FROM notifications
+                     WHERE reference_type = 'contract'
+                       AND reference_id = $1
+                       AND type = 'contract_completed'`,
+                    [contractId]
+                ),
+            ]);
+
+        expect(contractResult.rows[0].status).toBe("completed");
+        expect(projectResult.rows[0].status).toBe("completed");
+        expect(notificationResult.rowCount).toBe(1);
+    });
 });
