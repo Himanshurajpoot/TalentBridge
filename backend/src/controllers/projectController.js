@@ -547,7 +547,14 @@ const getUserPortfolioProjects = async (req, res) => {
                 p.deadline,
                 p.created_at,
                 p.updated_at,
-                c.name AS company_name
+                c.name AS company_name,
+                EXISTS (
+                    SELECT 1
+                    FROM proposals viewer_proposal
+                    WHERE viewer_proposal.project_id = p.id
+                      AND viewer_proposal.freelancer_id = $2
+                      AND viewer_proposal.status = 'accepted'
+                ) AS is_accepted_freelancer
 
              FROM projects p
 
@@ -562,13 +569,17 @@ const getUserPortfolioProjects = async (req, res) => {
                AND p.status IN ('in_progress', 'completed')
 
              ORDER BY p.updated_at DESC`,
-            [userId]
+            [userId, req.user.id]
         );
+
+        const projects = result.rows
+            .filter((project) => canViewProject(project, req.user))
+            .map(({ is_accepted_freelancer, ...project }) => project);
 
         return res.status(200).json({
             success: true,
             data: {
-                projects: result.rows,
+                projects,
             },
         });
     } catch (error) {

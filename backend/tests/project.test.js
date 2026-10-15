@@ -668,5 +668,68 @@ describe("Projects API", () => {
             budget_max: "90000.00",
             status: "completed",
         });
+
+        const acceptedFreelancerResponse = await request(app)
+            .get("/api/projects/user/2/portfolio")
+            .set(
+                "Authorization",
+                ["Bearer", freelancerToken].join(" ")
+            );
+        expect(acceptedFreelancerResponse.statusCode).toBe(200);
+        expect(
+            acceptedFreelancerResponse.body.data.projects
+                .filter((project) =>
+                    portfolioProjectIds.includes(project.id)
+                )
+                .map((project) => project.id)
+                .sort()
+        ).toEqual(portfolioProjectIds.slice(0, 2).sort());
+
+        const unrelatedFreelancerResponse = await request(app)
+            .get("/api/projects/user/2/portfolio")
+            .set(
+                "Authorization",
+                ["Bearer", secondFreelancerToken].join(" ")
+            );
+        expect(unrelatedFreelancerResponse.statusCode).toBe(200);
+        expect(
+            unrelatedFreelancerResponse.body.data.projects.some(
+                (project) =>
+                    portfolioProjectIds.includes(project.id)
+            )
+        ).toBe(false);
+
+        const adminResponse = await request(app)
+            .get("/api/projects/user/2/portfolio")
+            .set(
+                "Authorization",
+                ["Bearer", adminToken].join(" ")
+            );
+        expect(adminResponse.statusCode).toBe(200);
+        expect(
+            adminResponse.body.data.projects
+                .filter((project) =>
+                    portfolioProjectIds.includes(project.id)
+                )
+                .map((project) => project.id)
+                .sort()
+        ).toEqual(portfolioProjectIds.slice(0, 2).sort());
+    });
+
+    test("GET /api/projects/user/:userId/portfolio returns an empty list when none are visible", async () => {
+        const response = await request(app)
+            .get("/api/projects/user/999999999/portfolio")
+            .set(
+                "Authorization",
+                ["Bearer", freelancerToken].join(" ")
+            );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toEqual({
+            success: true,
+            data: {
+                projects: [],
+            },
+        });
     });
 });
