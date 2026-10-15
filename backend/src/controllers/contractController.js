@@ -38,6 +38,22 @@ const contractDetailsQuery = `
         ON freelancer.id = c.freelancer_id
 `;
 
+const hasFundedContractPayment = async (client, contractId) => {
+    const paymentResult = await client.query(
+        `SELECT id, status
+         FROM contract_payments
+         WHERE contract_id = $1
+           AND provider = 'razorpay'
+         ORDER BY id
+         FOR UPDATE`,
+        [contractId],
+    );
+
+    return paymentResult.rows.some(
+        (payment) => payment.status === "funded",
+    );
+};
+
 const getMyContracts = async (req, res) => {
     try {
         const result = await pool.query(
@@ -236,6 +252,16 @@ const submitContractWork = async (req, res) => {
             });
         }
 
+        if (!(await hasFundedContractPayment(client, contract.id))) {
+            await client.query("ROLLBACK");
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Contract payment must be confirmed before work can be submitted",
+            });
+        }
+
         const submissionResult = await client.query(
             `INSERT INTO contract_work_submissions (
                 contract_id,
@@ -370,6 +396,16 @@ const approveContractWork = async (req, res) => {
                 success: false,
                 message:
                     "Only submitted work can be approved for this contract",
+            });
+        }
+
+        if (!(await hasFundedContractPayment(client, contract.id))) {
+            await client.query("ROLLBACK");
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Contract payment must be confirmed before work can be approved",
             });
         }
 

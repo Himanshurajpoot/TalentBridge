@@ -89,6 +89,38 @@ describe("Contract completion API", () => {
         );
     };
 
+    const createContractPayment = async ({
+        status = "funded",
+        providerPaymentReference = `payment-${contractId}`,
+    } = {}) => {
+        await pool.query(
+            `INSERT INTO contract_payments (
+                contract_id,
+                client_id,
+                freelancer_id,
+                amount,
+                agreed_amount_snapshot,
+                currency,
+                provider,
+                provider_order_reference,
+                provider_payment_reference,
+                idempotency_key,
+                status
+             )
+             VALUES ($1, $2, $3, 55000, 55000, 'INR', 'razorpay',
+                     $4, $5, $6, $7)`,
+            [
+                contractId,
+                clientId,
+                freelancerId,
+                `order-${contractId}`,
+                providerPaymentReference,
+                `contract-payment-${contractId}`,
+                status,
+            ],
+        );
+    };
+
     const createWorkSubmission = async (
         submissionContractId = contractId,
         submissionFreelancerId = freelancerId,
@@ -186,6 +218,10 @@ describe("Contract completion API", () => {
                  WHERE reference_type = 'contract'
                    AND reference_id = $1`,
                 [contractId]
+            );
+            await pool.query(
+                "DELETE FROM contract_payments WHERE contract_id = $1",
+                [contractId],
             );
             await pool.query(
                 "DELETE FROM contracts WHERE id = $1",
@@ -395,8 +431,9 @@ describe("Contract completion API", () => {
 
         test("freelancer can submit work for an active contract", async () => {
         await createContract();
+            await createContractPayment();
 
-        const response = await request(app)
+            const response = await request(app)
             .post(`/api/contracts/${contractId}/submit-work`)
             .set(
                 "Authorization",
@@ -454,6 +491,127 @@ describe("Contract completion API", () => {
             reference_type: "contract",
             reference_id: contractId,
         });
+    });
+
+    test.each([
+        ["no payment", null],
+        ["funding_pending payment", {
+            status: "funding_pending",
+            providerPaymentReference: null,
+        }],
+        ["funding_pending payment with checkout reference", {
+            status: "funding_pending",
+            providerPaymentReference: "signature-reference-test",
+        }],
+    ])("freelancer cannot submit work with %s", async (_label, payment) => {
+        await createContract();
+        if (payment) {
+            await createContractPayment(payment);
+        }
+
+        const response = await request(app)
+            .post(`/api/contracts/${contractId}/submit-work`)
+            .set("Authorization", authorizationHeader(freelancerToken))
+            .send({
+                message: "Submission before confirmed funding.",
+            });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Contract payment must be confirmed before work can be submitted",
+        );
+
+        const contractResult = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
+            [contractId],
+        );
+        const submissionResult = await pool.query(
+            "SELECT id FROM contract_work_submissions WHERE contract_id = $1",
+            [contractId],
+        );
+        expect(contractResult.rows[0].status).toBe("active");
+        expect(submissionResult.rowCount).toBe(0);
+    });
+
+    test("submission waits for a locked pending payment to become funded", async () => {
+        await createContract();
+        await createContractPayment({
+            status: "funding_pending",
+            providerPaymentReference: null,
+        });
+
+        const paymentLockClient = await pool.connect();
+        let transactionOpen = false;
+        let submissionPromise;
+
+        try {
+            await paymentLockClient.query("BEGIN");
+            transactionOpen = true;
+            await paymentLockClient.query(
+                `SELECT id
+                 FROM contract_payments
+                 WHERE contract_id = $1
+                 FOR UPDATE`,
+                [contractId],
+            );
+
+            submissionPromise = request(app)
+                .post(`/api/contracts/${contractId}/submit-work`)
+                .set("Authorization", authorizationHeader(freelancerToken))
+                .send({
+                    message: "Submission concurrent with payment capture.",
+                })
+                .then((response) => response);
+
+            let submissionWaitingForPayment = false;
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+                const activityResult = await paymentLockClient.query(
+                    `SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_stat_activity
+                        WHERE datname = current_database()
+                          AND pid <> pg_backend_pid()
+                          AND state = 'active'
+                          AND wait_event_type = 'Lock'
+                          AND query ILIKE '%contract_payments%'
+                    ) AS waiting`,
+                );
+
+                if (activityResult.rows[0].waiting) {
+                    submissionWaitingForPayment = true;
+                    break;
+                }
+
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+
+            expect(submissionWaitingForPayment).toBe(true);
+
+            await paymentLockClient.query(
+                `UPDATE contract_payments
+                 SET status = 'funded',
+                     provider_payment_reference = $2
+                 WHERE contract_id = $1`,
+                [contractId, `captured-payment-${contractId}`],
+            );
+            await paymentLockClient.query("COMMIT");
+            transactionOpen = false;
+
+            const response = await submissionPromise;
+            expect(response.statusCode).toBe(201);
+
+            const contractResult = await pool.query(
+                "SELECT status FROM contracts WHERE id = $1",
+                [contractId],
+            );
+            expect(contractResult.rows[0].status).toBe("work_submitted");
+        } finally {
+            if (transactionOpen) {
+                await paymentLockClient.query("ROLLBACK");
+            }
+            await submissionPromise?.catch(() => {});
+            paymentLockClient.release();
+        }
     });
 
     test("client cannot submit work", async () => {
@@ -540,6 +698,7 @@ describe("Contract completion API", () => {
 
     test("submission URL is optional", async () => {
         await createContract();
+        await createContractPayment();
 
         const response = await request(app)
             .post(`/api/contracts/${contractId}/submit-work`)
@@ -565,6 +724,7 @@ describe("Contract completion API", () => {
 
     test("work cannot be submitted twice", async () => {
         await createContract();
+        await createContractPayment();
 
         const firstResponse = await request(app)
             .post(`/api/contracts/${contractId}/submit-work`)
@@ -635,6 +795,7 @@ describe("Contract completion API", () => {
     test("client can approve submitted work and notify the freelancer after completion", async () => {
         await createContract();
         await markContractWorkSubmitted();
+        await createContractPayment();
 
         const response = await request(app)
             .patch(`/api/contracts/${contractId}/approve`)
@@ -682,6 +843,50 @@ describe("Contract completion API", () => {
                 reference_id: contractId,
             }),
         ]);
+    });
+
+    test.each([
+        ["no payment", null],
+        ["funding_pending payment", {
+            status: "funding_pending",
+            providerPaymentReference: null,
+        }],
+        ["funding_pending payment with checkout reference", {
+            status: "funding_pending",
+            providerPaymentReference: "signature-reference-test",
+        }],
+    ])("client cannot approve submitted work with %s", async (_label, payment) => {
+        await createContract("work_submitted");
+        await createWorkSubmission();
+        if (payment) {
+            await createContractPayment(payment);
+        }
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/approve`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Contract payment must be confirmed before work can be approved",
+        );
+
+        const contractResult = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
+            [contractId],
+        );
+        const projectResult = await pool.query(
+            "SELECT status FROM projects WHERE id = $1",
+            [projectId],
+        );
+        const notificationResult = await pool.query(
+            `SELECT id FROM notifications
+             WHERE reference_type = 'contract' AND reference_id = $1`,
+            [contractId],
+        );
+        expect(contractResult.rows[0].status).toBe("work_submitted");
+        expect(projectResult.rows[0].status).toBe("in_progress");
+        expect(notificationResult.rowCount).toBe(0);
     });
 
     test("freelancer cannot approve submitted work", async () => {
@@ -778,6 +983,7 @@ describe("Contract completion API", () => {
     test("concurrent approval attempts produce one success and one conflict", async () => {
         await createContract();
         await markContractWorkSubmitted();
+        await createContractPayment();
 
         const responses = await Promise.all([
             request(app)
@@ -806,6 +1012,7 @@ describe("Contract completion API", () => {
     test("project update failure rolls back approval and does not notify", async () => {
         await createContract();
         await markContractWorkSubmitted();
+        await createContractPayment();
 
         await pool.query(
             `CREATE OR REPLACE FUNCTION project_work_approval_failure_test()
@@ -942,6 +1149,7 @@ describe("Contract completion API", () => {
     test("client can use the legacy route to approve submitted work", async () => {
         await createContract("work_submitted");
         await createWorkSubmission();
+        await createContractPayment();
 
         const response = await request(app)
             .patch(`/api/contracts/${contractId}/complete`)
@@ -985,6 +1193,40 @@ describe("Contract completion API", () => {
                 type: "contract_completed",
             },
         ]);
+    });
+
+    test.each([
+        ["no payment", null],
+        ["funding_pending payment", {
+            status: "funding_pending",
+            providerPaymentReference: "signature-reference-test",
+        }],
+    ])("legacy completion cannot bypass funding with %s", async (_label, payment) => {
+        await createContract("work_submitted");
+        await createWorkSubmission();
+        if (payment) {
+            await createContractPayment(payment);
+        }
+
+        const response = await request(app)
+            .patch(`/api/contracts/${contractId}/complete`)
+            .set("Authorization", authorizationHeader(clientToken));
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body.message).toBe(
+            "Contract payment must be confirmed before work can be approved",
+        );
+
+        const contractResult = await pool.query(
+            "SELECT status FROM contracts WHERE id = $1",
+            [contractId],
+        );
+        const projectResult = await pool.query(
+            "SELECT status FROM projects WHERE id = $1",
+            [projectId],
+        );
+        expect(contractResult.rows[0].status).toBe("work_submitted");
+        expect(projectResult.rows[0].status).toBe("in_progress");
     });
 
     test("freelancer cannot use the legacy route when work is submitted", async () => {
@@ -1067,6 +1309,7 @@ describe("Contract completion API", () => {
     test("completion updates the contract timestamp", async () => {
         await createContract("work_submitted");
         await createWorkSubmission();
+        await createContractPayment();
         const previousTimestamp = await pool.query(
             "SELECT updated_at FROM contracts WHERE id = $1",
             [contractId]
@@ -1092,6 +1335,7 @@ describe("Contract completion API", () => {
     test("a project update failure rolls back completion and does not notify", async () => {
         await createContract("work_submitted");
         await createWorkSubmission();
+        await createContractPayment();
 
         await pool.query(
             `CREATE OR REPLACE FUNCTION project_completion_failure_test()
@@ -1160,6 +1404,7 @@ describe("Contract completion API", () => {
     test("concurrent legacy route requests produce one completion and one notification", async () => {
         await createContract("work_submitted");
         await createWorkSubmission();
+        await createContractPayment();
 
         const responses = await Promise.all([
             request(app)
@@ -1199,6 +1444,7 @@ describe("Contract completion API", () => {
     test("concurrent approval and legacy route requests complete once and notify once", async () => {
         await createContract("work_submitted");
         await createWorkSubmission();
+        await createContractPayment();
 
         const responses = await Promise.all([
             request(app)
