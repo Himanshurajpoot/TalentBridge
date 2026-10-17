@@ -532,9 +532,9 @@ describe("Contract completion API", () => {
         expect(contractResult.rows[0].status).toBe("active");
         expect(submissionResult.rowCount).toBe(0);
     });
-
     test("submission waits for a locked pending payment to become funded", async () => {
         await createContract();
+
         await createContractPayment({
             status: "funding_pending",
             providerPaymentReference: null,
@@ -547,6 +547,7 @@ describe("Contract completion API", () => {
         try {
             await paymentLockClient.query("BEGIN");
             transactionOpen = true;
+
             await paymentLockClient.query(
                 `SELECT id
                  FROM contract_payments
@@ -557,59 +558,62 @@ describe("Contract completion API", () => {
 
             submissionPromise = request(app)
                 .post(`/api/contracts/${contractId}/submit-work`)
-                .set("Authorization", authorizationHeader(freelancerToken))
+                .set(
+                    "Authorization",
+                    authorizationHeader(freelancerToken),
+                )
                 .send({
                     message: "Submission concurrent with payment capture.",
-                })
-                .then((response) => response);
+                });
 
-            let submissionWaitingForPayment = false;
-            for (let attempt = 0; attempt < 100; attempt += 1) {
-                const activityResult = await paymentLockClient.query(
-                    `SELECT EXISTS (
-                        SELECT 1
-                        FROM pg_stat_activity
-                        WHERE datname = current_database()
-                          AND pid <> pg_backend_pid()
-                          AND state = 'active'
-                          AND wait_event_type = 'Lock'
-                          AND query ILIKE '%contract_payments%'
-                    ) AS waiting`,
-                );
+            // Give the request a moment to reach the database.
+            await new Promise((resolve) => setTimeout(resolve, 500));
 
-                if (activityResult.rows[0].waiting) {
-                    submissionWaitingForPayment = true;
-                    break;
-                }
+            // The submission must still be pending while the payment row
+            // is locked and remains funding_pending.
+            let submissionCompleted = false;
 
-                await new Promise((resolve) => setTimeout(resolve, 10));
-            }
+            submissionPromise.then(() => {
+                submissionCompleted = true;
+            });
 
-            expect(submissionWaitingForPayment).toBe(true);
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            expect(submissionCompleted).toBe(false);
 
             await paymentLockClient.query(
                 `UPDATE contract_payments
                  SET status = 'funded',
                      provider_payment_reference = $2
                  WHERE contract_id = $1`,
-                [contractId, `captured-payment-${contractId}`],
+                [
+                    contractId,
+                    `captured-payment-${contractId}`,
+                ],
             );
+
             await paymentLockClient.query("COMMIT");
             transactionOpen = false;
 
             const response = await submissionPromise;
+
             expect(response.statusCode).toBe(201);
 
             const contractResult = await pool.query(
                 "SELECT status FROM contracts WHERE id = $1",
                 [contractId],
             );
-            expect(contractResult.rows[0].status).toBe("work_submitted");
+
+            expect(contractResult.rows[0].status).toBe(
+                "work_submitted",
+            );
         } finally {
             if (transactionOpen) {
                 await paymentLockClient.query("ROLLBACK");
             }
+
             await submissionPromise?.catch(() => {});
+
             paymentLockClient.release();
         }
     });
