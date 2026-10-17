@@ -30,6 +30,7 @@ router.get(
 router.patch(
     "/jobs/:jobId/applications/:applicationId",
     authenticate,
+    authorize("client", "admin"),
     updateApplicationStatus
 );
 
