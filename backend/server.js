@@ -23,6 +23,44 @@ const onlineUsers = new Map();
  */
 const activeConversations = new Map();
 
+const socketRateLimits = new Map();
+
+const checkSocketRateLimit = (
+    socketId,
+    eventName,
+    limit,
+    windowMs
+) => {
+    const key = `${socketId}:${eventName}`;
+    const now = Date.now();
+
+    const timestamps =
+        socketRateLimits.get(key) || [];
+
+    const recentTimestamps =
+        timestamps.filter(
+            (timestamp) =>
+                now - timestamp < windowMs
+        );
+
+    if (recentTimestamps.length >= limit) {
+        socketRateLimits.set(
+            key,
+            recentTimestamps
+        );
+        return false;
+    }
+
+    recentTimestamps.push(now);
+
+    socketRateLimits.set(
+        key,
+        recentTimestamps
+    );
+
+    return true;
+};
+
 const PORT = process.env.PORT || 5001;
 const HOST = process.env.HOST || "0.0.0.0";
 const SOCKET_CORS_ORIGINS = (
@@ -589,18 +627,31 @@ io.on("connection", (socket) => {
                     await pool.query(
                         `
                         SELECT
-                            m.id,
-                            m.conversation_id,
-                            m.sender_id,
-                            u.full_name AS sender_name,
-                            m.content,
-                            m.is_read,
-                            m.created_at
-                        FROM messages m
-                        JOIN users u
-                            ON u.id = m.sender_id
-                        WHERE m.conversation_id = $1
-                        ORDER BY m.created_at ASC
+                            recent_messages.id,
+                            recent_messages.conversation_id,
+                            recent_messages.sender_id,
+                            recent_messages.sender_name,
+                            recent_messages.content,
+                            recent_messages.is_read,
+                            recent_messages.created_at
+                        FROM (
+                            SELECT
+                                m.id,
+                                m.conversation_id,
+                                m.sender_id,
+                                u.full_name AS sender_name,
+                                m.content,
+                                m.is_read,
+                                m.created_at
+                            FROM messages m
+                            JOIN users u
+                                ON u.id = m.sender_id
+                            WHERE m.conversation_id = $1
+                            ORDER BY m.created_at DESC, m.id DESC
+                            LIMIT 100
+                        ) AS recent_messages
+                        ORDER BY recent_messages.created_at ASC,
+                                 recent_messages.id ASC
                         `,
                         [conversationId]
                     );
@@ -642,14 +693,39 @@ io.on("connection", (socket) => {
         ) => {
             try {
                 if (
+                    !checkSocketRateLimit(
+                        socket.id,
+                        "sendMessage",
+                        10,
+                        10_000
+                    )
+                ) {
+                    return callback({
+                        success: false,
+                        message:
+                            "Too many messages. Please try again later.",
+                    });
+                }
+
+                if (
                     !conversationId ||
-                    !content ||
+                    typeof content !== "string" ||
                     !content.trim()
                 ) {
                     return callback({
                         success: false,
                         message:
                             "Conversation ID and message content are required",
+                    });
+                }
+
+                const trimmedContent = content.trim();
+
+                if (trimmedContent.length > 5000) {
+                    return callback({
+                        success: false,
+                        message:
+                            "Message must be 5000 characters or less",
                     });
                 }
 
@@ -724,7 +800,7 @@ io.on("connection", (socket) => {
                         [
                             conversationId,
                             socket.user.id,
-                            content.trim(),
+                            trimmedContent,
                         ]
                     );
 
@@ -944,6 +1020,12 @@ io.on("connection", (socket) => {
      * =========================================================
      */
     socket.on("disconnect", () => {
+        for (const key of socketRateLimits.keys()) {
+            if (key.startsWith(`${socket.id}:`)) {
+                socketRateLimits.delete(key);
+            }
+        }
+
         if (socket.data.authExpiryTimer) {
             clearTimeout(socket.data.authExpiryTimer);
             socket.data.authExpiryTimer = null;

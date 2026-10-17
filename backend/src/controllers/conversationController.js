@@ -187,18 +187,31 @@ const getConversationMessages = async (req, res) => {
 
         const result = await pool.query(
             `SELECT
-                m.id,
-                m.conversation_id,
-                m.sender_id,
-                u.full_name AS sender_name,
-                m.content,
-                m.is_read,
-                m.created_at
-             FROM messages m
-             JOIN users u
-                ON u.id = m.sender_id
-             WHERE m.conversation_id = $1
-             ORDER BY m.created_at ASC`,
+                recent_messages.id,
+                recent_messages.conversation_id,
+                recent_messages.sender_id,
+                recent_messages.sender_name,
+                recent_messages.content,
+                recent_messages.is_read,
+                recent_messages.created_at
+             FROM (
+                 SELECT
+                    m.id,
+                    m.conversation_id,
+                    m.sender_id,
+                    u.full_name AS sender_name,
+                    m.content,
+                    m.is_read,
+                    m.created_at
+                 FROM messages m
+                 JOIN users u
+                    ON u.id = m.sender_id
+                 WHERE m.conversation_id = $1
+                 ORDER BY m.created_at DESC, m.id DESC
+                 LIMIT 100
+             ) AS recent_messages
+             ORDER BY recent_messages.created_at ASC,
+                      recent_messages.id ASC`,
             [conversationId]
         );
 

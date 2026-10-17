@@ -542,6 +542,64 @@ describe("Conversation API", () => {
         ).toBe("Hello Client");
     });
 
+    test("GET /api/conversations/:conversationId/messages - should return only the latest 100 messages", async () => {
+        const createResponse = await request(app)
+            .post("/api/conversations")
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            )
+            .send({
+                userId: 2,
+            });
+
+        expect(createResponse.statusCode).toBe(201);
+
+        conversationId =
+            createResponse.body.data.conversationId;
+
+        for (let i = 1; i <= 105; i += 1) {
+            await request(app)
+                .post(
+                    `/api/conversations/${conversationId}/messages`
+                )
+                .set(
+                    "Authorization",
+                    `Bearer ${clientToken}`
+                )
+                .send({
+                    content: `Pagination test message ${i}`,
+                })
+                .expect(201);
+        }
+
+        const response = await request(app)
+            .get(
+                `/api/conversations/${conversationId}/messages`
+            )
+            .set(
+                "Authorization",
+                `Bearer ${clientToken}`
+            );
+
+        expect(response.statusCode).toBe(200);
+
+        expect(response.body.success).toBe(true);
+
+        const messages =
+            response.body.data.messages;
+
+        expect(messages).toHaveLength(100);
+
+        expect(messages[0].content).toBe(
+            "Pagination test message 6"
+        );
+
+        expect(messages[99].content).toBe(
+            "Pagination test message 105"
+        );
+    });
+
     test("GET /api/conversations/:conversationId/messages - should return both messages", async () => {
         const createResponse = await request(app)
             .post("/api/conversations")

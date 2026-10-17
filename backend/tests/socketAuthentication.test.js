@@ -213,4 +213,64 @@ describe("Socket.IO authentication", () => {
             message: "You are not a member of this conversation",
         });
     });
+
+    test("rejects messages longer than 5000 characters", async () => {
+        const memberSocket = createSocket(freelancerToken);
+        await connectSocket(memberSocket);
+
+        const oversizedMessage = "a".repeat(5001);
+
+        const response = await emitWithAck(
+            memberSocket,
+            "sendMessage",
+            {
+                conversationId,
+                content: oversizedMessage,
+            }
+        );
+
+        expect(response).toMatchObject({
+            success: false,
+            message: "Message must be 5000 characters or less",
+        });
+    });
+
+    test("rate limits excessive sendMessage events", async () => {
+        const memberSocket = createSocket(freelancerToken);
+        await connectSocket(memberSocket);
+
+        for (let i = 0; i < 10; i += 1) {
+            const response = await emitWithAck(
+                memberSocket,
+                "sendMessage",
+                {
+                    conversationId,
+                    content: `Rate limit test message ${i}`,
+                }
+            );
+
+            expect(response.success).toBe(true);
+        }
+
+        const limitedResponse = await emitWithAck(
+            memberSocket,
+            "sendMessage",
+            {
+                conversationId,
+                content: "This message should be rate limited",
+            }
+        );
+
+        expect(limitedResponse).toMatchObject({
+            success: false,
+            message: "Too many messages. Please try again later.",
+        });
+
+        await pool.query(
+            `DELETE FROM messages
+             WHERE conversation_id = $1
+               AND content LIKE 'Rate limit test message %'`,
+            [conversationId]
+        );
+    });
 });
