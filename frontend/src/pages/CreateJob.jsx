@@ -10,6 +10,13 @@ function CreateJob() {
 
     const [loadingCompanies, setLoadingCompanies] = useState(true);
     const [loadingSkills, setLoadingSkills] = useState(true);
+    const [companyLoadError, setCompanyLoadError] = useState("");
+    const [companyRetryCount, setCompanyRetryCount] = useState(0);
+    const [companyName, setCompanyName] = useState("");
+    const [creatingCompany, setCreatingCompany] = useState(false);
+    const [companyCreationError, setCompanyCreationError] = useState("");
+    const [companyCreationSuccess, setCompanyCreationSuccess] =
+        useState("");
 
     const [formData, setFormData] = useState({
         companyId: "",
@@ -31,6 +38,9 @@ function CreateJob() {
 
     useEffect(() => {
         const fetchCompanies = async () => {
+            setLoadingCompanies(true);
+            setCompanyLoadError("");
+
             try {
                 const response = await api.get("/companies");
 
@@ -38,7 +48,7 @@ function CreateJob() {
             } catch (error) {
                 console.error("Failed to fetch companies:", error);
 
-                setError(
+                setCompanyLoadError(
                     error.response?.data?.message ||
                         "Failed to load your companies."
                 );
@@ -71,7 +81,7 @@ function CreateJob() {
 
         fetchCompanies();
         fetchSkills();
-    }, []);
+    }, [companyRetryCount]);
 
     const handleChange = (event) => {
         const { name, value, type, checked } = event.target;
@@ -80,6 +90,43 @@ function CreateJob() {
             ...current,
             [name]: type === "checkbox" ? checked : value,
         }));
+    };
+
+    const handleCreateCompany = async (event) => {
+        event.preventDefault();
+
+        if (creatingCompany) {
+            return;
+        }
+
+        setCreatingCompany(true);
+        setCompanyCreationError("");
+        setCompanyCreationSuccess("");
+
+        try {
+            const response = await api.post("/companies", {
+                name: companyName,
+            });
+            const company = response.data.data.company;
+
+            setCompanies((current) => [company, ...current]);
+            setFormData((current) => ({
+                ...current,
+                companyId: String(company.id),
+            }));
+            setCompanyName("");
+            setCompanyCreationSuccess(
+                "Company created. You can now continue posting your job."
+            );
+        } catch (error) {
+            console.error("Failed to create company:", error);
+            setCompanyCreationError(
+                error.response?.data?.message ||
+                    "Unable to create your company. Please try again."
+            );
+        } finally {
+            setCreatingCompany(false);
+        }
     };
 
     const handleSkillChange = (skillId) => {
@@ -169,16 +216,86 @@ function CreateJob() {
                         </div>
                     )}
 
-                    {companies.length === 0 ? (
-                        <div className="mt-8 rounded-lg bg-yellow-50 p-4 text-sm text-yellow-700">
-                            You don't have a company yet. Create a
-                            company before posting a job.
+                    {companyLoadError ? (
+                        <div className="mt-8 rounded-lg bg-red-50 p-4 text-sm text-red-700">
+                            <p>{companyLoadError}</p>
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setCompanyRetryCount((count) => count + 1)
+                                }
+                                className="mt-3 font-semibold text-red-800 underline"
+                            >
+                                Try loading companies again
+                            </button>
                         </div>
+                    ) : companies.length === 0 ? (
+                        <section className="mt-8 rounded-xl border border-amber-200 bg-amber-50 p-5">
+                            <h2 className="font-semibold text-amber-900">
+                                Create a company to post a job
+                            </h2>
+                            <p className="mt-1 text-sm text-amber-800">
+                                A company is required before you can publish
+                                a job. Once it is created, the job form will
+                                be available here.
+                            </p>
+
+                            {companyCreationError && (
+                                <div
+                                    role="alert"
+                                    className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700"
+                                >
+                                    {companyCreationError}
+                                </div>
+                            )}
+
+                            <form
+                                onSubmit={handleCreateCompany}
+                                className="mt-5"
+                            >
+                                <label
+                                    htmlFor="companyName"
+                                    className="block text-sm font-medium text-gray-700"
+                                >
+                                    Company Name
+                                </label>
+                                <input
+                                    id="companyName"
+                                    name="companyName"
+                                    type="text"
+                                    value={companyName}
+                                    onChange={(event) =>
+                                        setCompanyName(event.target.value)
+                                    }
+                                    required
+                                    className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-4 py-3 outline-none focus:border-blue-500"
+                                    placeholder="Your company name"
+                                />
+                                <button
+                                    type="submit"
+                                    disabled={creatingCompany}
+                                    className="mt-4 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {creatingCompany
+                                        ? "Creating company..."
+                                        : "Create Company"}
+                                </button>
+                            </form>
+                        </section>
                     ) : (
-                        <form
-                            onSubmit={handleSubmit}
-                            className="mt-8 space-y-6"
-                        >
+                        <>
+                            {companyCreationSuccess && (
+                                <p
+                                    role="status"
+                                    className="mt-6 rounded-lg bg-green-50 p-3 text-sm text-green-700"
+                                >
+                                    {companyCreationSuccess}
+                                </p>
+                            )}
+                            <form
+                                onSubmit={handleSubmit}
+                                className="mt-8 space-y-6"
+                            >
                             <div>
                                 <label
                                     htmlFor="companyId"
@@ -480,7 +597,8 @@ function CreateJob() {
                                     ? "Creating Job..."
                                     : "Create Job"}
                             </button>
-                        </form>
+                            </form>
+                        </>
                     )}
                 </div>
             </main>
