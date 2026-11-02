@@ -114,8 +114,6 @@ app.use((req, res) => {
 });
 
 app.use((error, req, res, next) => {
-    console.error("Unhandled error:", error);
-
     if (res.headersSent) {
         return next(error);
     }
@@ -125,11 +123,18 @@ app.use((error, req, res, next) => {
         error.status === 400 &&
         error.type === "entity.parse.failed"
     ) {
+        console.error("Malformed JSON request", {
+            method: req.method,
+            path: req.path,
+        });
+
         return res.status(400).json({
             success: false,
             message: "Invalid JSON",
         });
     }
+
+    console.error("Unhandled error:", error);
 
     return res.status(500).json({
         success: false,
