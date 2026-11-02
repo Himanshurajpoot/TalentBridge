@@ -95,8 +95,20 @@ const createRazorpayOrder = async (order) => {
     return razorpay.orders.create(order);
 };
 
+const findRazorpayOrdersByReceipt = async (receipt) => {
+    const { keyId, keySecret } = getRazorpayConfig();
+
+    const razorpay = new Razorpay({
+        key_id: keyId,
+        key_secret: keySecret,
+    });
+
+    return razorpay.orders.all({ receipt, count: 100 });
+};
+
 module.exports = {
     createRazorpayOrder,
+    findRazorpayOrdersByReceipt,
     verifyRazorpayPaymentSignature,
     verifyRazorpayWebhookSignature,
     getRazorpayConfig,

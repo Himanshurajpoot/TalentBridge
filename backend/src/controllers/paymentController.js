@@ -1,6 +1,7 @@
 const pool = require("../config/db");
 const {
     createRazorpayOrder,
+    findRazorpayOrdersByReceipt,
     verifyRazorpayPaymentSignature,
     verifyRazorpayWebhookSignature,
     getRazorpayConfig,
@@ -147,7 +148,11 @@ const createContractPaymentOrder = async (req, res) => {
             `SELECT
                 id,
                 contract_id,
+                client_id,
+                freelancer_id,
                 amount,
+                currency,
+                provider,
                 provider_order_reference,
                 status
              FROM contract_payments
@@ -169,11 +174,113 @@ const createContractPaymentOrder = async (req, res) => {
             }
 
             if (!existingPayment.provider_order_reference) {
-                await client.query("ROLLBACK");
-                return res.status(409).json({
-                    success: false,
-                    message:
-                        "Order creation is already in progress or requires reconciliation",
+                const recoveryAmountPaise = convertRupeesToPaise(
+                    existingPayment.amount,
+                );
+                const recoveryIsValid =
+                    existingPayment.status === "created" &&
+                    Number(existingPayment.client_id) === Number(contract.client_id) &&
+                    Number(existingPayment.freelancer_id) === Number(contract.freelancer_id) &&
+                    existingPayment.provider === PAYMENT_PROVIDER &&
+                    existingPayment.currency === PAYMENT_CURRENCY &&
+                    recoveryAmountPaise === amountPaise;
+
+                if (!recoveryIsValid) {
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({
+                        success: false,
+                        message: "Payment order requires reconciliation",
+                    });
+                }
+
+                const receipt = `tbp_${existingPayment.id}`;
+                let providerOrders;
+                try {
+                    providerOrders = await findRazorpayOrdersByReceipt(receipt);
+                } catch {
+                    await client.query("ROLLBACK");
+                    return res.status(502).json({
+                        success: false,
+                        message:
+                            "Payment order could not be reconciled; retry after provider availability is restored",
+                    });
+                }
+
+                const matchingOrders = Array.isArray(providerOrders?.items)
+                    ? providerOrders.items.filter(
+                        (order) => order?.receipt === receipt,
+                    )
+                    : [];
+                const recoveredOrder =
+                    matchingOrders.length === 1 ? matchingOrders[0] : null;
+                const recoveredOrderIsValid =
+                    recoveredOrder &&
+                    typeof recoveredOrder.id === "string" &&
+                    recoveredOrder.id.trim().length > 0 &&
+                    recoveredOrder.amount === recoveryAmountPaise &&
+                    recoveredOrder.currency === PAYMENT_CURRENCY &&
+                    recoveredOrder.notes?.payment_id === String(existingPayment.id) &&
+                    recoveredOrder.notes?.contract_id === String(contract.id);
+
+                if (!recoveredOrderIsValid) {
+                    await client.query("ROLLBACK");
+                    return res.status(409).json({
+                        success: false,
+                        message:
+                            "No unique matching provider order was found; the payment requires reconciliation",
+                    });
+                }
+
+                const recoveredPaymentUpdate = await client.query(
+                    `UPDATE contract_payments
+                     SET provider_order_reference = $2,
+                         status = 'funding_pending',
+                         updated_at = NOW()
+                     WHERE id = $1
+                       AND provider_order_reference IS NULL
+                       AND status = 'created'
+                     RETURNING id, amount`,
+                    [existingPayment.id, recoveredOrder.id],
+                );
+
+                if (recoveredPaymentUpdate.rowCount !== 1) {
+                    throw new Error("Recovered payment order could not be persisted");
+                }
+
+                await client.query(
+                    `INSERT INTO contract_payment_events (
+                        contract_payment_id,
+                        provider,
+                        source,
+                        event_type,
+                        amount,
+                        currency,
+                        event_data
+                     )
+                     VALUES ($1, $2, 'system', 'order_created', $3, $4, $5)`,
+                    [
+                        existingPayment.id,
+                        PAYMENT_PROVIDER,
+                        recoveredPaymentUpdate.rows[0].amount,
+                        PAYMENT_CURRENCY,
+                        JSON.stringify({
+                            order_id: recoveredOrder.id,
+                            recovered: true,
+                        }),
+                    ],
+                );
+
+                await client.query("COMMIT");
+                return res.status(200).json({
+                    success: true,
+                    data: frontendOrderDetails(
+                        {
+                            ...existingPayment,
+                            provider_order_reference: recoveredOrder.id,
+                            amount_paise: recoveryAmountPaise,
+                        },
+                        keyId,
+                    ),
                 });
             }
 

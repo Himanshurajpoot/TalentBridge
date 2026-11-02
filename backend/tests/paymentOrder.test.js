@@ -68,7 +68,7 @@ const createFakeClient = () => {
                 };
             }
 
-            if (query.startsWith("SELECT id, contract_id, amount, provider_order_reference, status FROM contract_payments")) {
+            if (query.startsWith("SELECT id, contract_id, client_id, freelancer_id, amount, currency, provider, provider_order_reference, status FROM contract_payments")) {
                 const payment = [...databaseState.payments.values()].find(
                     (item) => item.idempotency_key === params[0],
                 );
@@ -298,6 +298,7 @@ const seedPayment = ({
 
 describe("Contract payment order creation", () => {
     const createRazorpayOrder = jest.fn();
+    const listRazorpayOrders = jest.fn();
 
     beforeAll(() => {
         originalKeyId = process.env.RAZORPAY_KEY_ID;
@@ -327,8 +328,13 @@ describe("Contract payment order creation", () => {
         createRazorpayOrder.mockResolvedValue({
             id: "order_test_123",
         });
+        listRazorpayOrders.mockReset();
+        listRazorpayOrders.mockResolvedValue({ items: [] });
         Razorpay.mockImplementation(() => ({
-            orders: { create: createRazorpayOrder },
+            orders: {
+                create: createRazorpayOrder,
+                all: listRazorpayOrders,
+            },
         }));
         process.env.RAZORPAY_KEY_ID = "rzp_test_public";
         process.env.RAZORPAY_KEY_SECRET = "test_secret";
@@ -522,7 +528,7 @@ describe("Contract payment order creation", () => {
         expect(createRazorpayOrder).not.toHaveBeenCalled();
     });
 
-    test("does not retry an uncertain Razorpay failure for the same key", async () => {
+    test("does not create another order when reconciliation finds no provider order", async () => {
         seedContract({ id: 105 });
         createRazorpayOrder.mockRejectedValueOnce(
             new Error("provider timeout"),
@@ -538,6 +544,10 @@ describe("Contract payment order creation", () => {
             expect(firstResponse.statusCode).toBe(502);
             expect(retryResponse.statusCode).toBe(409);
             expect(createRazorpayOrder).toHaveBeenCalledTimes(1);
+            expect(listRazorpayOrders).toHaveBeenCalledWith({
+                receipt: "tbp_1",
+                count: 100,
+            });
             expect(
                 databaseState.events.map((event) => event.event_type),
             ).toEqual([
@@ -545,6 +555,68 @@ describe("Contract payment order creation", () => {
                 "order_creation_outcome_unknown",
             ]);
             expect(databaseState.payments.get("1").status).toBe("created");
+        } finally {
+            errorSpy.mockRestore();
+        }
+    });
+
+    test("recovers the order after an unknown provider outcome without creating a duplicate", async () => {
+        seedContract({ id: 114 });
+        createRazorpayOrder.mockRejectedValueOnce(
+            new Error("provider timeout"),
+        );
+        listRazorpayOrders.mockResolvedValueOnce({
+            items: [{
+                id: "order_recovered_123",
+                receipt: "tbp_1",
+                amount: 123456,
+                currency: "INR",
+                notes: {
+                    contract_id: "114",
+                    payment_id: "1",
+                },
+            }],
+        });
+        const errorSpy = jest
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+
+        try {
+            const firstResponse = await invokeController(
+                114,
+                "request-114",
+            );
+            const retryResponse = await invokeController(
+                114,
+                "request-114",
+            );
+
+            expect(firstResponse.statusCode).toBe(502);
+            expect(retryResponse.statusCode).toBe(200);
+            expect(retryResponse.body.data).toMatchObject({
+                paymentId: "1",
+                razorpayOrderId: "order_recovered_123",
+                amount: 123456,
+                currency: "INR",
+            });
+            expect(createRazorpayOrder).toHaveBeenCalledTimes(1);
+            expect(listRazorpayOrders).toHaveBeenCalledTimes(1);
+            expect(databaseState.payments.size).toBe(1);
+            expect(databaseState.payments.get("1")).toMatchObject({
+                provider_order_reference: "order_recovered_123",
+                status: "funding_pending",
+            });
+            expect(
+                databaseState.events.map((event) => event.event_type),
+            ).toEqual([
+                "order_creation_started",
+                "order_creation_outcome_unknown",
+                "order_created",
+            ]);
+            expect(databaseState.events[2].event_data).toEqual({
+                order_id: "order_recovered_123",
+                recovered: true,
+            });
         } finally {
             errorSpy.mockRestore();
         }
