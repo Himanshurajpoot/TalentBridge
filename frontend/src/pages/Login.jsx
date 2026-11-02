@@ -4,7 +4,7 @@ import { useAuth } from "../context/useAuth";
 
 function Login() {
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const { login, sessionRestoreError } = useAuth();
 
     const [formData, setFormData] = useState({
         email: "",
@@ -54,6 +54,12 @@ function Login() {
                 {error && (
                     <div className="mt-6 rounded-lg bg-red-50 p-3 text-sm text-red-600">
                         {error}
+                    </div>
+                )}
+
+                {sessionRestoreError && (
+                    <div className="mt-6 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                        {sessionRestoreError}
                     </div>
                 )}
 

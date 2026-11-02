@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import api from "../services/api";
@@ -137,6 +137,7 @@ function ContractDetails() {
     const [paymentMessage, setPaymentMessage] = useState("");
     const [errorStatus, setErrorStatus] = useState(null);
     const [error, setError] = useState("");
+    const paymentIdempotencyKeyRef = useRef(null);
 
     const canApproveWork =
         contract?.status === "work_submitted" &&
@@ -263,22 +264,38 @@ function ContractDetails() {
             setPaymentError("");
             setPaymentMessage("");
 
-            const idempotencyKey = window.crypto.randomUUID
-                ? window.crypto.randomUUID()
-                : Array.from(
-                      window.crypto.getRandomValues(new Uint8Array(16)),
-                      (byte) => byte.toString(16).padStart(2, "0")
-                  ).join("");
+            if (
+                !paymentIdempotencyKeyRef.current ||
+                paymentIdempotencyKeyRef.current.contractId !==
+                    contractId
+            ) {
+                paymentIdempotencyKeyRef.current =
+                    {
+                        contractId,
+                        key: window.crypto.randomUUID
+                            ? window.crypto.randomUUID()
+                            : Array.from(
+                                  window.crypto.getRandomValues(
+                                      new Uint8Array(16)
+                                  ),
+                                  (byte) => byte
+                                      .toString(16)
+                                      .padStart(2, "0")
+                              ).join(""),
+                    };
+            }
 
             const response = await api.post(
                 `/contracts/${contractId}/payment-orders`,
                 {},
                 {
                     headers: {
-                        "Idempotency-Key": idempotencyKey,
+                        "Idempotency-Key":
+                            paymentIdempotencyKeyRef.current.key,
                     },
                 }
             );
+            paymentIdempotencyKeyRef.current = null;
 
             const {
                 razorpayOrderId,
@@ -364,6 +381,19 @@ function ContractDetails() {
             );
 
             const status = requestError.response?.status;
+            const responseMessage =
+                requestError.response?.data?.message || "";
+            const outcomeIsUncertain =
+                status === undefined ||
+                status === 408 ||
+                status >= 500 ||
+                (status === 409 &&
+                    responseMessage.toLowerCase().includes("reconcil"));
+
+            if (!outcomeIsUncertain) {
+                paymentIdempotencyKeyRef.current = null;
+            }
+
             setPaymentError(
                 status === 401
                     ? "Please sign in again to make this payment."
@@ -372,7 +402,7 @@ function ContractDetails() {
                     : status === 404
                     ? "This contract could not be found."
                     : status === 409
-                    ? requestError.response?.data?.message ||
+                    ? responseMessage ||
                       "A payment order already exists or this contract is not eligible."
                     : status === 503
                     ? "Payment checkout is not configured right now."

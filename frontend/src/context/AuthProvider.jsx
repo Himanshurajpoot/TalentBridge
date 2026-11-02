@@ -11,6 +11,8 @@ export function AuthProvider({ children }) {
     const [loading, setLoading] = useState(
         () => Boolean(localStorage.getItem("token"))
     );
+    const [sessionRestoreError, setSessionRestoreError] =
+        useState("");
 
     useEffect(() => {
         const token = localStorage.getItem("token");
@@ -27,9 +29,19 @@ export function AuthProvider({ children }) {
                 setUser(currentUser);
                 connectSocket();
             })
-            .catch(() => {
-                localStorage.removeItem("token");
-                disconnectSocket();
+            .catch((error) => {
+                const status = error.response?.status;
+
+                if (status === 401 || status === 403) {
+                    localStorage.removeItem("token");
+                    disconnectSocket();
+                    setUser(null);
+                    return;
+                }
+
+                setSessionRestoreError(
+                    "Your session could not be checked right now. Please try signing in again."
+                );
                 setUser(null);
             })
             .finally(() => {
@@ -48,6 +60,7 @@ export function AuthProvider({ children }) {
 
         localStorage.setItem("token", token);
         setUser(loggedInUser);
+        setSessionRestoreError("");
         connectSocket();
 
         return loggedInUser;
@@ -57,6 +70,7 @@ export function AuthProvider({ children }) {
         disconnectSocket();
         localStorage.removeItem("token");
         setUser(null);
+        setSessionRestoreError("");
     };
 
     return (
@@ -64,6 +78,7 @@ export function AuthProvider({ children }) {
             value={{
                 user,
                 loading,
+                sessionRestoreError,
                 login,
                 logout,
             }}

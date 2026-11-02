@@ -38,6 +38,8 @@ export default function Messages() {
 
     const messagesEndRef = useRef(null);
     const selectedConversationRef = useRef(null);
+    const messagesRequestRef = useRef(0);
+    const contentRef = useRef("");
 
     useEffect(() => {
         selectedConversationRef.current =
@@ -445,6 +447,11 @@ export default function Messages() {
 
         const conversationId =
             Number(selectedConversationId);
+        const requestId = ++messagesRequestRef.current;
+        const isCurrentRequest = () =>
+            messagesRequestRef.current === requestId &&
+            Number(selectedConversationRef.current?.id) ===
+                conversationId;
 
         /*
          * Join the conversation room.
@@ -453,6 +460,10 @@ export default function Messages() {
             "joinConversation",
             conversationId,
             (joinResponse) => {
+                if (!isCurrentRequest()) {
+                    return;
+                }
+
                 if (!joinResponse?.success) {
                     console.error(
                         "joinConversation failed:",
@@ -478,10 +489,9 @@ export default function Messages() {
             "getConversationMessages",
             conversationId,
             (messageResponse) => {
-                console.log(
-                    "getConversationMessages response:",
-                    messageResponse
-                );
+                if (!isCurrentRequest()) {
+                    return;
+                }
 
                 if (!messageResponse?.success) {
                     console.error(
@@ -513,6 +523,12 @@ export default function Messages() {
                 );
             }
         );
+
+        return () => {
+            if (messagesRequestRef.current === requestId) {
+                messagesRequestRef.current += 1;
+            }
+        };
     }, [
         selectedConversationId,
         connected,
@@ -528,8 +544,11 @@ export default function Messages() {
     const handleSelectConversation = (
         conversation
     ) => {
+        selectedConversationRef.current = conversation;
+        messagesRequestRef.current += 1;
         setSelectedConversation(conversation);
         setMessages([]);
+        contentRef.current = "";
         setContent("");
         setError("");
         setLoadingMessages(true);
@@ -548,6 +567,7 @@ export default function Messages() {
             return;
         }
 
+        const conversationId = Number(selectedConversation.id);
         const socket = getSocket();
 
         if (!socket?.connected) {
@@ -560,11 +580,17 @@ export default function Messages() {
         socket.emit(
             "sendMessage",
             {
-                conversationId:
-                    selectedConversation.id,
+                conversationId,
                 content: trimmedContent,
             },
             (response) => {
+                if (
+                    Number(selectedConversationRef.current?.id) !==
+                    conversationId
+                ) {
+                    return;
+                }
+
                 if (!response?.success) {
                     setError(
                         response?.message ||
@@ -605,9 +631,7 @@ export default function Messages() {
                                     Number(
                                         conversation.id
                                     ) !==
-                                    Number(
-                                        selectedConversation.id
-                                    )
+                                    conversationId
                                 ) {
                                     return conversation;
                                 }
@@ -639,7 +663,10 @@ export default function Messages() {
                     );
                 }
 
-                setContent("");
+                if (contentRef.current === trimmedContent) {
+                    contentRef.current = "";
+                    setContent("");
+                }
                 setError("");
             }
         );
@@ -976,14 +1003,17 @@ export default function Messages() {
                                     <input
                                         type="text"
                                         value={content}
+                                        maxLength={5000}
                                         onChange={(
                                             event
-                                        ) =>
+                                        ) => {
+                                            contentRef.current =
+                                                event.target.value;
                                             setContent(
                                                 event.target
                                                     .value
-                                            )
-                                        }
+                                            );
+                                        }}
                                         placeholder="Type a message..."
                                         className="flex-1 rounded-lg border border-gray-300 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                                     />
