@@ -299,11 +299,8 @@ const submitContractWork = async (req, res) => {
                 referenceType: "contract",
                 referenceId: contract.id,
             });
-        } catch (notificationError) {
-            console.error(
-                "Work submission notification error:",
-                notificationError,
-            );
+        } catch {
+            console.error("Work submission notification failed");
         }
 
         return res.status(201).json({
@@ -444,11 +441,8 @@ const approveWork = async (req, res, resolveContract) => {
                 referenceType: "contract",
                 referenceId: contract.id,
             });
-        } catch (notificationError) {
-            console.error(
-                "Contract work approval notification error:",
-                notificationError,
-            );
+        } catch {
+            console.error("Contract work approval notification failed");
         }
 
         return res.status(200).json({

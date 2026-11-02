@@ -14,8 +14,10 @@ const createNotification = async ({
     referenceType = null,
     referenceId = null,
 }) => {
-    const result = await pool.query(
-        `INSERT INTO notifications
+    let result;
+    try {
+        result = await pool.query(
+            `INSERT INTO notifications
             (
                 user_id,
                 type,
@@ -26,23 +28,31 @@ const createNotification = async ({
             )
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
-        [
-            userId,
-            type,
-            title,
-            message,
-            referenceType,
-            referenceId,
-        ]
-    );
+            [
+                userId,
+                type,
+                title,
+                message,
+                referenceType,
+                referenceId,
+            ]
+        );
+    } catch {
+        console.error("Notification persistence failed");
+        return null;
+    }
 
     const notification = result.rows[0];
 
     if (io) {
-        io.to(`user:${userId}`).emit(
-            "newNotification",
-            notification
-        );
+        try {
+            io.to(`user:${userId}`).emit(
+                "newNotification",
+                notification
+            );
+        } catch {
+            console.error("Notification emission failed");
+        }
     }
 
     return notification;
