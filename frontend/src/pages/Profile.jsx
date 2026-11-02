@@ -6,6 +6,7 @@ import { getProfilePhotoSrc } from "../utils/profilePhoto";
 
 function Profile() {
     const { user, updateProfilePhoto } = useAuth();
+    const authenticatedUserRef = useRef(user);
     const [profile, setProfile] = useState(null);
     const [skills, setSkills] = useState([]);
     const [availableSkills, setAvailableSkills] = useState([]);
@@ -140,6 +141,41 @@ function Profile() {
                     resumeUrl: data?.resume_url ?? "",
                 });
             } catch (error) {
+                if (error.response?.status === 404) {
+                    setProfile({
+                        full_name:
+                            authenticatedUserRef.current
+                                ?.full_name ?? "",
+                        email:
+                            authenticatedUserRef.current
+                                ?.email ?? "",
+                        role:
+                            authenticatedUserRef.current
+                                ?.role ?? "",
+                        avatar_url:
+                            authenticatedUserRef.current
+                                ?.avatar_url ??
+                            null,
+                        headline: null,
+                        bio: null,
+                        location: null,
+                        phone: null,
+                        resume_url: null,
+                        hourly_rate: null,
+                        experience_years: null,
+                    });
+                    setForm({
+                        headline: "",
+                        bio: "",
+                        location: "",
+                        phone: "",
+                        hourlyRate: "",
+                        experienceYears: "",
+                        resumeUrl: "",
+                    });
+                    return;
+                }
+
                 console.error(
                     "Failed to fetch profile:",
                     error
