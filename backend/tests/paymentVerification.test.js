@@ -17,6 +17,7 @@ let duplicatePayment;
 let events;
 let originalKeyId;
 let originalKeySecret;
+let originalMode;
 
 const createClient = () => ({
     query: jest.fn(async (sql, params = []) => {
@@ -130,6 +131,7 @@ describe("Razorpay payment signature verification", () => {
     beforeAll(() => {
         originalKeyId = process.env.RAZORPAY_KEY_ID;
         originalKeySecret = process.env.RAZORPAY_KEY_SECRET;
+        originalMode = process.env.RAZORPAY_MODE;
     });
 
     beforeEach(() => {
@@ -151,6 +153,7 @@ describe("Razorpay payment signature verification", () => {
         pool.connect.mockClear();
         process.env.RAZORPAY_KEY_ID = "rzp_test_public";
         process.env.RAZORPAY_KEY_SECRET = "verification_test_secret";
+        process.env.RAZORPAY_MODE = "test";
     });
 
     afterAll(() => {
@@ -164,6 +167,12 @@ describe("Razorpay payment signature verification", () => {
             delete process.env.RAZORPAY_KEY_SECRET;
         } else {
             process.env.RAZORPAY_KEY_SECRET = originalKeySecret;
+        }
+
+        if (originalMode === undefined) {
+            delete process.env.RAZORPAY_MODE;
+        } else {
+            process.env.RAZORPAY_MODE = originalMode;
         }
     });
 
@@ -189,6 +198,42 @@ describe("Razorpay payment signature verification", () => {
                 verification: "signature_valid",
             },
         });
+    });
+
+    test("valid live-mode credentials allow payment signature verification", async () => {
+        process.env.RAZORPAY_MODE = "live";
+        process.env.RAZORPAY_KEY_ID = "rzp_live_public";
+        process.env.RAZORPAY_KEY_SECRET = "verification_live_secret";
+
+        const response = await invokeVerification();
+
+        expect(response.statusCode).toBe(200);
+        expect(payment.provider_payment_reference).toBe("pay_test_456");
+    });
+
+    test.each([
+        ["test", "rzp_live_public"],
+        ["live", "rzp_test_public"],
+    ])(
+        "rejects %s mode with mismatched key prefix before database access",
+        async (mode, keyId) => {
+            process.env.RAZORPAY_MODE = mode;
+            process.env.RAZORPAY_KEY_ID = keyId;
+
+            const response = await invokeVerification();
+
+            expect(response.statusCode).toBe(503);
+            expect(pool.connect).not.toHaveBeenCalled();
+        },
+    );
+
+    test("rejects invalid Razorpay mode before database access", async () => {
+        process.env.RAZORPAY_MODE = "production";
+
+        const response = await invokeVerification();
+
+        expect(response.statusCode).toBe(503);
+        expect(pool.connect).not.toHaveBeenCalled();
     });
 
     test("invalid signature does not change payment state", async () => {

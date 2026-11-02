@@ -15,6 +15,7 @@ const lockTails = new Map();
 let databaseState;
 let originalKeyId;
 let originalKeySecret;
+let originalMode;
 
 const acquireLock = async (key, client) => {
     const previous = lockTails.get(key) || Promise.resolve();
@@ -301,6 +302,7 @@ describe("Contract payment order creation", () => {
     beforeAll(() => {
         originalKeyId = process.env.RAZORPAY_KEY_ID;
         originalKeySecret = process.env.RAZORPAY_KEY_SECRET;
+        originalMode = process.env.RAZORPAY_MODE;
     });
 
     beforeEach(() => {
@@ -311,6 +313,7 @@ describe("Contract payment order creation", () => {
             nextPaymentId: 1,
         };
         lockTails.clear();
+        pool.connect.mockClear();
         pool.connect.mockImplementation(async () => createFakeClient());
         pool.query.mockImplementation(async (sql, params) => {
             const client = createFakeClient();
@@ -329,6 +332,7 @@ describe("Contract payment order creation", () => {
         }));
         process.env.RAZORPAY_KEY_ID = "rzp_test_public";
         process.env.RAZORPAY_KEY_SECRET = "test_secret";
+        process.env.RAZORPAY_MODE = "test";
     });
 
     afterAll(() => {
@@ -342,6 +346,12 @@ describe("Contract payment order creation", () => {
             delete process.env.RAZORPAY_KEY_SECRET;
         } else {
             process.env.RAZORPAY_KEY_SECRET = originalKeySecret;
+        }
+
+        if (originalMode === undefined) {
+            delete process.env.RAZORPAY_MODE;
+        } else {
+            process.env.RAZORPAY_MODE = originalMode;
         }
     });
 
@@ -389,6 +399,59 @@ describe("Contract payment order creation", () => {
             "order_creation_started",
             "order_created",
         ]);
+    });
+
+    test("creates a LIVE MODE order with live credentials", async () => {
+        process.env.RAZORPAY_MODE = "live";
+        process.env.RAZORPAY_KEY_ID = "rzp_live_public";
+        seedContract({ id: 101 });
+
+        const response = await invokeController(101, "request-live-101");
+
+        expect(response.statusCode).toBe(201);
+        expect(response.body.data.keyId).toBe("rzp_live_public");
+        expect(createRazorpayOrder).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+        ["test", "rzp_live_public"],
+        ["live", "rzp_test_public"],
+    ])(
+        "rejects %s mode with mismatched key prefix",
+        async (mode, keyId) => {
+            process.env.RAZORPAY_MODE = mode;
+            process.env.RAZORPAY_KEY_ID = keyId;
+
+            const response = await invokeController(101, "request-mismatch");
+
+            expect(response.statusCode).toBe(503);
+            expect(createRazorpayOrder).not.toHaveBeenCalled();
+            expect(pool.connect).not.toHaveBeenCalled();
+        },
+    );
+
+    test.each([
+        ["missing key ID", { keyId: undefined, keySecret: "test_secret", mode: "test" }],
+        ["missing key secret", { keyId: "rzp_test_public", keySecret: undefined, mode: "test" }],
+        ["invalid mode", { keyId: "rzp_test_public", keySecret: "test_secret", mode: "production" }],
+    ])("rejects Razorpay configuration with %s", async (_label, config) => {
+        if (config.keyId === undefined) {
+            delete process.env.RAZORPAY_KEY_ID;
+        } else {
+            process.env.RAZORPAY_KEY_ID = config.keyId;
+        }
+        if (config.keySecret === undefined) {
+            delete process.env.RAZORPAY_KEY_SECRET;
+        } else {
+            process.env.RAZORPAY_KEY_SECRET = config.keySecret;
+        }
+        process.env.RAZORPAY_MODE = config.mode;
+
+        const response = await invokeController(101, "request-invalid-config");
+
+        expect(response.statusCode).toBe(503);
+        expect(createRazorpayOrder).not.toHaveBeenCalled();
+        expect(pool.connect).not.toHaveBeenCalled();
     });
 
     test("rejects a different authenticated client", async () => {

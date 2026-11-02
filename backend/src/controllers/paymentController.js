@@ -3,6 +3,7 @@ const {
     createRazorpayOrder,
     verifyRazorpayPaymentSignature,
     verifyRazorpayWebhookSignature,
+    getRazorpayConfig,
 } = require("../services/razorpayService");
 
 const PAYMENT_PROVIDER = "razorpay";
@@ -69,15 +70,16 @@ const createContractPaymentOrder = async (req, res) => {
         });
     }
 
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
-
-    if (!keyId?.startsWith("rzp_test_") || !keySecret?.trim()) {
+    let razorpayConfig;
+    try {
+        razorpayConfig = getRazorpayConfig();
+    } catch {
         return res.status(503).json({
             success: false,
-            message: "Razorpay test-mode credentials are not configured",
+            message: "Razorpay credentials are not configured",
         });
     }
+    const { keyId } = razorpayConfig;
 
     if (req.user.role !== "client") {
         return res.status(403).json({
@@ -532,13 +534,12 @@ const verifyContractPayment = async (req, res) => {
         });
     }
 
-    if (
-        !process.env.RAZORPAY_KEY_ID?.startsWith("rzp_test_") ||
-        !process.env.RAZORPAY_KEY_SECRET?.trim()
-    ) {
+    try {
+        getRazorpayConfig();
+    } catch {
         return res.status(503).json({
             success: false,
-            message: "Razorpay test-mode credentials are not configured",
+            message: "Razorpay credentials are not configured",
         });
     }
 
@@ -601,7 +602,7 @@ const verifyContractPayment = async (req, res) => {
             await client.query("ROLLBACK");
             return res.status(503).json({
                 success: false,
-                message: "Razorpay test-mode credentials are not configured",
+                message: "Razorpay credentials are not configured",
             });
         }
 
