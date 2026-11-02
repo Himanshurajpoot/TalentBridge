@@ -1,16 +1,43 @@
-# React + Vite
+# TalentBridge frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The frontend is the React single-page application for TalentBridge clients and
+freelancers. It includes project/job discovery and management, profile tools,
+contracts, messaging, notifications, and payment checkout.
 
-Currently, two official plugins are available:
+## Setup and development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```sh
+npm install
+cp .env.example .env
+npm run dev
+```
 
-## React Compiler
+By default, Vite serves the frontend on port `5173` and proxies `/api` to
+`http://127.0.0.1:5001`. Keep `VITE_API_URL` empty for this local setup.
+The local Socket.IO fallback points to the same backend.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Environment variables
 
-## Expanding the ESLint configuration
+- `VITE_API_URL` (optional): API base URL, including `/api`. Set this when
+  frontend and backend are on separate origins; otherwise the app uses `/api`.
+- `VITE_SOCKET_URL`: Socket.IO backend URL. Production builds require an
+  explicit URL and reject loopback hosts. Local development may use the
+  existing localhost fallback.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Vite variables are included in browser assets. Never put passwords, JWT
+secrets, database credentials, or Razorpay secret keys in frontend variables.
+
+## Quality checks and production build
+
+```sh
+npm run lint
+npm run build
+```
+
+For split-origin production, configure `VITE_API_URL` to the backend API URL
+including `/api`, and `VITE_SOCKET_URL` to the backend HTTPS/WSS origin. The
+backend must separately allow the deployed frontend origin in both
+`CORS_ORIGINS` and `SOCKET_CORS_ORIGIN`.
+
+The application uses `BrowserRouter`; production hosting must rewrite unknown
+frontend routes to `index.html`.
