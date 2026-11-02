@@ -75,11 +75,15 @@ function ApplicationForm({ jobId }) {
                         onChange={(event) =>
                             setCoverLetter(event.target.value)
                         }
+                        maxLength={5000}
                         required
                         rows="6"
                         className="mt-2 w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500"
                         placeholder="Tell the client why you're a good fit..."
                     />
+                    <p className="mt-1 text-right text-xs text-gray-500">
+                        {coverLetter.length}/5000
+                    </p>
                 </div>
 
                 <div>
