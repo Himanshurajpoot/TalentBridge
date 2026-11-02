@@ -1,12 +1,31 @@
 const request = require("supertest");
+const fs = require("fs/promises");
+const path = require("path");
 
 const app = require("../src/app");
 
 const pool = require("../src/config/db");
+const profilePhotoDirectory = path.resolve(
+    __dirname,
+    "../uploads/profile-photos"
+);
+const uploadedPhotoUrls = [];
+
+const createPngBuffer = () =>
+    Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII=",
+        "base64"
+    );
+
+const trackPhoto = (photoUrl) => {
+    uploadedPhotoUrls.push(photoUrl);
+    return photoUrl;
+};
 
 describe("Profile API", () => {
     let clientToken;
     let freelancerToken;
+    let photoOwnerId;
 
     beforeAll(async () => {
         const clientLogin = await request(app)
@@ -30,6 +49,9 @@ describe("Profile API", () => {
         expect(freelancerLogin.statusCode).toBe(200);
 
         freelancerToken = freelancerLogin.body.data.token;
+        photoOwnerId = Number(
+            freelancerLogin.body.data.user.id
+        );
     });
 
     beforeEach(async () => {
@@ -39,6 +61,221 @@ describe("Profile API", () => {
             WHERE user_id IN (2, 3)
             `
         );
+    });
+
+    afterEach(async () => {
+        await Promise.all(
+            uploadedPhotoUrls.map((photoUrl) =>
+                fs.rm(
+                    path.join(
+                        profilePhotoDirectory,
+                        path.basename(photoUrl)
+                    ),
+                    { force: true }
+                )
+            )
+        );
+        uploadedPhotoUrls.length = 0;
+    });
+
+    test("POST /api/profile/me/photo - should upload a valid PNG", async () => {
+        const response = await request(app)
+            .post("/api/profile/me/photo")
+            .set("Authorization", `Bearer ${freelancerToken}`)
+            .attach("photo", createPngBuffer(), {
+                filename: "profile.png",
+                contentType: "image/png",
+            });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.success).toBe(true);
+
+        const photoUrl = trackPhoto(
+            response.body.data.profile.avatar_url
+        );
+        expect(photoUrl).toMatch(
+            /^\/uploads\/profile-photos\/[0-9a-f-]+\.png$/
+        );
+
+        const profile = await pool.query(
+            "SELECT avatar_url FROM profiles WHERE user_id = $1",
+            [photoOwnerId]
+        );
+        expect(profile.rows[0].avatar_url).toBe(photoUrl);
+
+        const storedFile = await fs.readFile(
+            path.join(
+                profilePhotoDirectory,
+                path.basename(photoUrl)
+            )
+        );
+        expect(storedFile.subarray(0, 8)).toEqual(
+            createPngBuffer().subarray(0, 8)
+        );
+
+        const imageResponse = await request(app).get(photoUrl);
+        expect(imageResponse.statusCode).toBe(200);
+        expect(imageResponse.headers["content-type"]).toMatch(
+            /^image\/png/
+        );
+        expect(
+            imageResponse.headers["x-content-type-options"]
+        ).toBe("nosniff");
+
+        const profileUpdate = await request(app)
+            .put("/api/profile/me")
+            .set("Authorization", `Bearer ${freelancerToken}`)
+            .send({ bio: "Photo should remain unchanged" });
+        expect(profileUpdate.statusCode).toBe(200);
+        expect(profileUpdate.body.data.profile.avatar_url).toBe(
+            photoUrl
+        );
+    });
+
+    test("POST /api/profile/me/photo - should reject unauthenticated uploads", async () => {
+        const response = await request(app)
+            .post("/api/profile/me/photo")
+            .attach("photo", createPngBuffer(), {
+                filename: "profile.png",
+                contentType: "image/png",
+            });
+
+        expect(response.statusCode).toBe(401);
+    });
+
+    test("POST /api/profile/me/photo - should reject unsupported file types", async () => {
+        const response = await request(app)
+            .post("/api/profile/me/photo")
+            .set("Authorization", `Bearer ${freelancerToken}`)
+            .attach("photo", Buffer.from("GIF89a"), {
+                filename: "profile.gif",
+                contentType: "image/gif",
+            });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.body.message).toMatch(
+            /JPEG, PNG, and WebP/
+        );
+    });
+
+    test("POST /api/profile/me/photo - should reject content that does not match its image type", async () => {
+        const response = await request(app)
+            .post("/api/profile/me/photo")
+            .set("Authorization", `Bearer ${freelancerToken}`)
+            .attach("photo", Buffer.from("GIF89a"), {
+                filename: "profile.png",
+                contentType: "image/png",
+            });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.body.message).toMatch(
+            /does not match/
+        );
+    });
+
+    test("POST /api/profile/me/photo - should reject files larger than 5 MB", async () => {
+        const response = await request(app)
+            .post("/api/profile/me/photo")
+            .set("Authorization", `Bearer ${freelancerToken}`)
+            .attach(
+                "photo",
+                Buffer.alloc(5 * 1024 * 1024 + 1),
+                {
+                    filename: "large.png",
+                    contentType: "image/png",
+                }
+            );
+
+        expect(response.statusCode).toBe(413);
+    });
+
+    test("POST /api/profile/me/photo - should not allow changing another user's photo", async () => {
+        const existingPhotoUrl =
+            "https://example.com/other-user-photo.png";
+        const otherUserId = photoOwnerId === 2 ? 3 : 2;
+
+        await pool.query(
+            `INSERT INTO profiles (user_id, avatar_url)
+             VALUES ($1, $2)
+             ON CONFLICT (user_id)
+             DO UPDATE SET avatar_url = EXCLUDED.avatar_url`,
+            [otherUserId, existingPhotoUrl]
+        );
+
+        try {
+            const targetedResponse = await request(app)
+                .post(`/api/profile/${otherUserId}/photo`)
+                .set(
+                    "Authorization",
+                    `Bearer ${freelancerToken}`
+                )
+                .attach("photo", createPngBuffer(), {
+                    filename: "profile.png",
+                    contentType: "image/png",
+                });
+            expect(targetedResponse.statusCode).toBe(404);
+
+            const forgedOwnerResponse = await request(app)
+                .post("/api/profile/me/photo")
+                .set(
+                    "Authorization",
+                    `Bearer ${freelancerToken}`
+                )
+                .field("userId", String(otherUserId))
+                .attach("photo", createPngBuffer(), {
+                    filename: "profile.png",
+                    contentType: "image/png",
+                });
+            expect(forgedOwnerResponse.statusCode).toBe(400);
+
+            const profile = await pool.query(
+                "SELECT avatar_url FROM profiles WHERE user_id = $1",
+                [otherUserId]
+            );
+            expect(profile.rows[0].avatar_url).toBe(
+                existingPhotoUrl
+            );
+        } finally {
+            await pool.query(
+                "DELETE FROM profiles WHERE user_id = $1",
+                [otherUserId]
+            );
+        }
+    });
+
+    test("DELETE /api/profile/me/photo - should remove the photo and stored file", async () => {
+        const uploadResponse = await request(app)
+            .post("/api/profile/me/photo")
+            .set("Authorization", `Bearer ${freelancerToken}`)
+            .attach("photo", createPngBuffer(), {
+                filename: "profile.png",
+                contentType: "image/png",
+            });
+
+        expect(uploadResponse.statusCode).toBe(200);
+        const photoUrl = trackPhoto(
+            uploadResponse.body.data.profile.avatar_url
+        );
+        const filePath = path.join(
+            profilePhotoDirectory,
+            path.basename(photoUrl)
+        );
+
+        const response = await request(app)
+            .delete("/api/profile/me/photo")
+            .set("Authorization", `Bearer ${freelancerToken}`);
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body.data.profile.avatar_url).toBeNull();
+        await expect(fs.access(filePath)).rejects.toMatchObject({
+            code: "ENOENT",
+        });
+
+        const profile = await pool.query(
+            "SELECT avatar_url FROM profiles WHERE user_id = $1",
+            [photoOwnerId]
+        );
+        expect(profile.rows[0].avatar_url).toBeNull();
     });
 
     test("GET /api/profile/me - should reject request without token", async () => {

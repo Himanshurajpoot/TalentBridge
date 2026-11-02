@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
 import NotificationBell from "../components/NotificationBell";
+import ProfileAvatar from "../components/ProfileAvatar";
 
 function MainLayout({ children }) {
     const { user, logout } = useAuth();
@@ -26,7 +27,12 @@ function MainLayout({ children }) {
 
                         <NotificationBell />
 
-                        <span className="text-gray-700">
+                        <span className="flex items-center gap-2 text-gray-700">
+                            <ProfileAvatar
+                                name={user?.full_name}
+                                photoUrl={user?.avatar_url}
+                                className="h-8 w-8 text-xs"
+                            />
                             {user?.full_name}
                         </span>
 

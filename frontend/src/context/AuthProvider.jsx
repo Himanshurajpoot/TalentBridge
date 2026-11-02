@@ -98,6 +98,14 @@ export function AuthProvider({ children }) {
         setSessionRestoreError("");
     };
 
+    const updateProfilePhoto = (avatarUrl) => {
+        setUser((currentUser) =>
+            currentUser
+                ? { ...currentUser, avatar_url: avatarUrl }
+                : currentUser
+        );
+    };
+
     return (
         <AuthContext.Provider
             value={{
@@ -107,6 +115,7 @@ export function AuthProvider({ children }) {
                 login,
                 register,
                 logout,
+                updateProfilePhoto,
             }}
         >
             {children}

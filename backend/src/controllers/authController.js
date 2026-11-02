@@ -196,13 +196,15 @@ const login = async (req, res) => {
 
         const result = await pool.query(
             `SELECT
-                id,
-                full_name,
-                email,
-                password_hash,
-                role
-             FROM users
-             WHERE email = $1`,
+                u.id,
+                u.full_name,
+                u.email,
+                u.password_hash,
+                u.role,
+                p.avatar_url
+             FROM users u
+             LEFT JOIN profiles p ON p.user_id = u.id
+             WHERE u.email = $1`,
             [normalizedEmail]
         );
 
@@ -254,13 +256,15 @@ const getMe = async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT
-                id,
-                full_name,
-                email,
-                role,
-                created_at
-             FROM users
-             WHERE id = $1`,
+                u.id,
+                u.full_name,
+                u.email,
+                u.role,
+                u.created_at,
+                p.avatar_url
+             FROM users u
+             LEFT JOIN profiles p ON p.user_id = u.id
+             WHERE u.id = $1`,
             [req.user.id]
         );
 

@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const path = require("path");
 
 const pool = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
@@ -46,6 +47,25 @@ app.options(
 );
 
 app.use(helmet());
+
+app.use(
+    "/uploads/profile-photos",
+    express.static(
+        path.resolve(__dirname, "../uploads/profile-photos"),
+        {
+            dotfiles: "deny",
+            index: false,
+            immutable: true,
+            maxAge: "1y",
+            setHeaders: (res) => {
+                res.setHeader(
+                    "X-Content-Type-Options",
+                    "nosniff"
+                );
+            },
+        }
+    )
+);
 
 app.post(
     "/api/contracts/payment-webhooks/razorpay",

@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import api from "../services/api";
+import { useAuth } from "../context/useAuth";
+import ProfileAvatar from "../components/ProfileAvatar";
+import { getProfilePhotoSrc } from "../utils/profilePhoto";
 
 function Profile() {
+    const { user, updateProfilePhoto } = useAuth();
     const [profile, setProfile] = useState(null);
     const [skills, setSkills] = useState([]);
     const [availableSkills, setAvailableSkills] = useState([]);
@@ -34,6 +38,17 @@ function Profile() {
     const [updatingSkillId, setUpdatingSkillId] = useState(null);
     const [portfolioLoading, setPortfolioLoading] = useState(true);
     const [reviewsLoading, setReviewsLoading] = useState(true);
+    const [selectedPhoto, setSelectedPhoto] = useState(null);
+    const [photoPreview, setPhotoPreview] = useState("");
+    const [photoUploading, setPhotoUploading] = useState(false);
+    const [photoRemoving, setPhotoRemoving] = useState(false);
+    const [photoError, setPhotoError] = useState("");
+    const [photoViewerOpen, setPhotoViewerOpen] =
+        useState(false);
+    const photoInputRef = useRef(null);
+    const photoPreviewUrlRef = useRef(null);
+    const photoTriggerRef = useRef(null);
+    const photoViewerCloseRef = useRef(null);
 
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
@@ -41,6 +56,41 @@ function Profile() {
     const [skillSuccess, setSkillSuccess] = useState("");
     const [portfolioError, setPortfolioError] = useState("");
     const [reviewsError, setReviewsError] = useState("");
+
+    useEffect(
+        () => () => {
+            if (photoPreviewUrlRef.current) {
+                URL.revokeObjectURL(
+                    photoPreviewUrlRef.current
+                );
+            }
+        },
+        []
+    );
+
+    useEffect(() => {
+        if (!photoViewerOpen) {
+            return undefined;
+        }
+
+        const photoTrigger = photoTriggerRef.current;
+        const handleKeyDown = (event) => {
+            if (event.key === "Escape") {
+                setPhotoViewerOpen(false);
+            }
+        };
+
+        document.addEventListener("keydown", handleKeyDown);
+        photoViewerCloseRef.current?.focus();
+
+        return () => {
+            document.removeEventListener(
+                "keydown",
+                handleKeyDown
+            );
+            photoTrigger?.focus();
+        };
+    }, [photoViewerOpen]);
 
     const getLoggedInUserId = () => {
         try {
@@ -246,6 +296,156 @@ function Profile() {
             ...current,
             [name]: value,
         }));
+    };
+
+    const handlePhotoSelection = (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        if (
+            ![
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+            ].includes(file.type)
+        ) {
+            setPhotoError(
+                "Choose a JPEG, PNG, or WebP image."
+            );
+            if (photoPreviewUrlRef.current) {
+                URL.revokeObjectURL(
+                    photoPreviewUrlRef.current
+                );
+                photoPreviewUrlRef.current = null;
+            }
+            setSelectedPhoto(null);
+            setPhotoPreview("");
+            return;
+        }
+
+        if (file.size > 5 * 1024 * 1024) {
+            setPhotoError(
+                "Choose an image that is no larger than 5 MB."
+            );
+            if (photoPreviewUrlRef.current) {
+                URL.revokeObjectURL(
+                    photoPreviewUrlRef.current
+                );
+                photoPreviewUrlRef.current = null;
+            }
+            setSelectedPhoto(null);
+            setPhotoPreview("");
+            return;
+        }
+
+        if (photoPreviewUrlRef.current) {
+            URL.revokeObjectURL(photoPreviewUrlRef.current);
+        }
+        photoPreviewUrlRef.current =
+            URL.createObjectURL(file);
+        setPhotoPreview(photoPreviewUrlRef.current);
+        setPhotoError("");
+        setSelectedPhoto(file);
+    };
+
+    const clearPhotoPreview = () => {
+        if (photoPreviewUrlRef.current) {
+            URL.revokeObjectURL(photoPreviewUrlRef.current);
+            photoPreviewUrlRef.current = null;
+        }
+
+        setPhotoPreview("");
+        setSelectedPhoto(null);
+    };
+
+    const handlePhotoUpload = async () => {
+        if (!selectedPhoto || photoUploading) {
+            return;
+        }
+
+        setPhotoUploading(true);
+        setPhotoError("");
+
+        try {
+            const formData = new FormData();
+            formData.append("photo", selectedPhoto);
+
+            const response = await api.post(
+                "/profile/me/photo",
+                formData,
+                {
+                    headers: {
+                        "Content-Type": "multipart/form-data",
+                    },
+                }
+            );
+            const avatarUrl =
+                response.data.data.profile.avatar_url;
+
+            setProfile((current) => ({
+                ...(current || {}),
+                full_name:
+                    current?.full_name || user?.full_name,
+                avatar_url: avatarUrl,
+            }));
+            updateProfilePhoto(avatarUrl);
+            clearPhotoPreview();
+            setSuccess("Profile photo updated.");
+        } catch (requestError) {
+            const status = requestError.response?.status;
+            setPhotoError(
+                status === 400 || status === 413
+                    ? requestError.response?.data?.message ||
+                          "Choose a valid JPEG, PNG, or WebP image under 5 MB."
+                    : "Unable to upload your photo right now. Please try again."
+            );
+        } finally {
+            setPhotoUploading(false);
+        }
+    };
+
+    const handlePhotoRemoval = async () => {
+        if (
+            !profile?.avatar_url ||
+            photoRemoving ||
+            !window.confirm("Remove your profile photo?")
+        ) {
+            return;
+        }
+
+        setPhotoRemoving(true);
+        setPhotoError("");
+
+        try {
+            await api.delete("/profile/me/photo");
+            setProfile((current) => ({
+                ...current,
+                avatar_url: null,
+            }));
+            updateProfilePhoto(null);
+            setSuccess("Profile photo removed.");
+        } catch (requestError) {
+            if (requestError.response?.data?.photoRemoved) {
+                setProfile((current) => ({
+                    ...current,
+                    avatar_url: null,
+                }));
+                updateProfilePhoto(null);
+                setPhotoError(
+                    "Your photo was removed, but its stored file could not be deleted. Please contact support."
+                );
+            } else {
+                setPhotoError(
+                    "Unable to remove your photo right now. Please try again."
+                );
+            }
+        } finally {
+            setPhotoRemoving(false);
+        }
     };
 
     const handleSkillChange = (event) => {
@@ -532,6 +732,13 @@ function Profile() {
         );
     }
 
+    const displayedPhotoUrl =
+        photoPreview || profile?.avatar_url;
+    const displayedPhotoSrc =
+        getProfilePhotoSrc(displayedPhotoUrl);
+    const profilePhotoName =
+        profile?.full_name || user?.full_name || "your";
+
     return (
         <div className="min-h-screen bg-gray-100">
             <main className="mx-auto max-w-4xl px-6 py-10">
@@ -544,6 +751,170 @@ function Profile() {
                         Manage your professional profile.
                     </p>
                 </div>
+
+                <section
+                    aria-labelledby="profile-photo-heading"
+                    className="mb-6 rounded-xl bg-white p-6 shadow-sm"
+                >
+                    <h2
+                        id="profile-photo-heading"
+                        className="text-lg font-semibold text-gray-900"
+                    >
+                        Profile photo
+                    </h2>
+                    <div className="mt-4 flex flex-wrap items-center gap-4">
+                        {displayedPhotoSrc ? (
+                            <button
+                                ref={photoTriggerRef}
+                                type="button"
+                                onClick={() =>
+                                    setPhotoViewerOpen(true)
+                                }
+                                aria-label="View profile photo"
+                                className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+                            >
+                                <ProfileAvatar
+                                    name={
+                                        profile?.full_name ||
+                                        user?.full_name
+                                    }
+                                    photoUrl={displayedPhotoUrl}
+                                    className="h-20 w-20 cursor-zoom-in text-2xl"
+                                />
+                            </button>
+                        ) : (
+                            <ProfileAvatar
+                                name={
+                                    profile?.full_name ||
+                                    user?.full_name
+                                }
+                                photoUrl={displayedPhotoUrl}
+                                className="h-20 w-20 text-2xl"
+                            />
+                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                            <input
+                                ref={photoInputRef}
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                                onChange={handlePhotoSelection}
+                                className="sr-only"
+                                aria-label="Choose a profile photo"
+                            />
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    photoInputRef.current?.click()
+                                }
+                                disabled={
+                                    photoUploading ||
+                                    photoRemoving
+                                }
+                                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {profile?.avatar_url
+                                    ? "Change Photo"
+                                    : "Add Photo"}
+                            </button>
+                            {selectedPhoto ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={handlePhotoUpload}
+                                        disabled={photoUploading}
+                                        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {photoUploading
+                                            ? "Uploading..."
+                                            : "Upload Photo"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={clearPhotoPreview}
+                                        disabled={photoUploading}
+                                        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <span className="w-full text-sm text-gray-500">
+                                        Preview before upload
+                                    </span>
+                                </>
+                            ) : null}
+                            {profile?.avatar_url &&
+                            !selectedPhoto ? (
+                                <button
+                                    type="button"
+                                    onClick={handlePhotoRemoval}
+                                    disabled={
+                                        photoUploading ||
+                                        photoRemoving
+                                    }
+                                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {photoRemoving
+                                        ? "Removing..."
+                                        : "Remove Photo"}
+                                </button>
+                            ) : null}
+                        </div>
+                    </div>
+                    {photoError ? (
+                        <p
+                            role="alert"
+                            className="mt-3 text-sm text-red-600"
+                        >
+                            {photoError}
+                        </p>
+                    ) : null}
+                </section>
+
+                {photoViewerOpen && displayedPhotoSrc ? (
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+                        onClick={(event) => {
+                            if (
+                                event.target ===
+                                event.currentTarget
+                            ) {
+                                setPhotoViewerOpen(false);
+                            }
+                        }}
+                    >
+                        <div
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="profile-photo-viewer-title"
+                            className="relative flex max-h-[95vh] w-full max-w-5xl flex-col items-center rounded-xl bg-gray-950 p-4 shadow-2xl sm:p-6"
+                            onClick={(event) =>
+                                event.stopPropagation()
+                            }
+                        >
+                            <h2
+                                id="profile-photo-viewer-title"
+                                className="sr-only"
+                            >
+                                Profile photo for{" "}
+                                {profilePhotoName}
+                            </h2>
+                            <button
+                                ref={photoViewerCloseRef}
+                                type="button"
+                                onClick={() =>
+                                    setPhotoViewerOpen(false)
+                                }
+                                className="mb-3 self-end rounded-lg bg-white px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                            >
+                                Close
+                            </button>
+                            <img
+                                src={displayedPhotoSrc}
+                                alt={`Profile photo of ${profilePhotoName}`}
+                                className="max-h-[calc(95vh-5rem)] max-w-full rounded-lg object-contain"
+                            />
+                        </div>
+                    </div>
+                ) : null}
 
                 {error && (
                     <div className="mb-6 rounded-lg bg-red-50 p-4 text-red-600">

@@ -3,7 +3,10 @@ const express = require("express");
 const {
     getMyProfile,
     upsertMyProfile,
+    uploadMyProfilePhoto,
+    removeMyProfilePhoto,
 } = require("../controllers/profileController");
+const handleProfilePhotoUpload = require("../middleware/profilePhotoUpload");
 
 const {
     addMySkill,
@@ -26,6 +29,19 @@ router.put(
     "/me",
     authenticate,
     upsertMyProfile
+);
+
+router.post(
+    "/me/photo",
+    authenticate,
+    handleProfilePhotoUpload,
+    uploadMyProfilePhoto
+);
+
+router.delete(
+    "/me/photo",
+    authenticate,
+    removeMyProfilePhoto
 );
 
 router.post(
