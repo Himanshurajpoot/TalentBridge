@@ -6,6 +6,10 @@ import { getSocket } from "../services/socket";
 export default function NotificationBell() {
     const [notifications, setNotifications] = useState([]);
     const [open, setOpen] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(false);
+    const [actionError, setActionError] = useState("");
+    const [retryCount, setRetryCount] = useState(0);
 
     const navigate = useNavigate();
     const notificationRef = useRef(null);
@@ -20,6 +24,9 @@ export default function NotificationBell() {
         let mounted = true;
 
         const fetchNotifications = async () => {
+            setLoading(true);
+            setLoadError(false);
+
             try {
                 const response =
                     await api.get("/notifications");
@@ -32,11 +39,14 @@ export default function NotificationBell() {
                     response.data?.data?.notifications || [];
 
                 setNotifications(serverNotifications);
-            } catch (error) {
-                console.error(
-                    "Failed to fetch notifications:",
-                    error
-                );
+            } catch {
+                if (mounted) {
+                    setLoadError(true);
+                }
+            } finally {
+                if (mounted) {
+                    setLoading(false);
+                }
             }
         };
 
@@ -90,7 +100,7 @@ export default function NotificationBell() {
                 handleNewNotification
             );
         };
-    }, []);
+    }, [retryCount]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -120,6 +130,15 @@ export default function NotificationBell() {
     }, [open]);
 
     const markAsRead = async (id) => {
+        const previousNotification = notifications.find(
+            (notification) => notification.id === id
+        );
+
+        if (!previousNotification || previousNotification.is_read) {
+            return;
+        }
+
+        setActionError("");
         setNotifications((current) =>
             current.map((notification) =>
                 notification.id === id
@@ -137,20 +156,22 @@ export default function NotificationBell() {
             );
 
             if (
-                response.data?.success &&
-                response.data?.data?.notification
+                !response.data?.success ||
+                !response.data?.data?.notification
             ) {
-                const updatedNotification =
-                    response.data.data.notification;
-
-                setNotifications((current) =>
-                    current.map((notification) =>
-                        notification.id === id
-                            ? updatedNotification
-                            : notification
-                    )
-                );
+                throw new Error("Notification update failed");
             }
+
+            const updatedNotification =
+                response.data.data.notification;
+
+            setNotifications((current) =>
+                current.map((notification) =>
+                    notification.id === id
+                        ? updatedNotification
+                        : notification
+                )
+            );
         } catch (error) {
             console.error(
                 "Failed to mark notification as read:",
@@ -166,13 +187,26 @@ export default function NotificationBell() {
                             notification.id !== id
                     )
                 );
+            } else {
+                setNotifications((current) =>
+                    current.map((notification) =>
+                        notification.id === id
+                            ? previousNotification
+                            : notification
+                    )
+                );
             }
+
+            setActionError(
+                "Couldn't update the notification. Please try again."
+            );
         }
     };
 
     const markAllAsRead = async () => {
         const previousNotifications =
             notifications;
+        setActionError("");
 
         setNotifications((current) =>
             current.map((notification) => ({
@@ -190,6 +224,9 @@ export default function NotificationBell() {
                 setNotifications(
                     previousNotifications
                 );
+                setActionError(
+                    "Couldn't update notifications. Please try again."
+                );
             }
         } catch (error) {
             console.error(
@@ -199,6 +236,9 @@ export default function NotificationBell() {
 
             setNotifications(
                 previousNotifications
+            );
+            setActionError(
+                "Couldn't update notifications. Please try again."
             );
         }
     };
@@ -289,6 +329,8 @@ export default function NotificationBell() {
                 onClick={() =>
                     setOpen((current) => !current)
                 }
+                aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}
+                aria-expanded={open}
                 className="relative rounded-lg p-2 text-slate-700 hover:bg-slate-100"
             >
                 <span className="text-xl">🔔</span>
@@ -303,7 +345,7 @@ export default function NotificationBell() {
             </button>
 
             {open && (
-                <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border border-slate-200 bg-white shadow-lg">
+                <div className="absolute right-0 z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white shadow-lg">
                     <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                         <h3 className="font-semibold text-slate-900">
                             Notifications
@@ -320,8 +362,42 @@ export default function NotificationBell() {
                         )}
                     </div>
 
+                    {actionError && (
+                        <p
+                            role="alert"
+                            className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-800"
+                        >
+                            {actionError}
+                        </p>
+                    )}
+
                     <div className="max-h-96 overflow-y-auto">
-                        {notifications.length === 0 ? (
+                        {loading ? (
+                            <div
+                                role="status"
+                                className="px-4 py-8 text-center text-sm text-slate-500"
+                            >
+                                Loading notifications...
+                            </div>
+                        ) : loadError ? (
+                            <div className="px-4 py-5 text-center">
+                                <p
+                                    role="alert"
+                                    className="text-sm text-slate-600"
+                                >
+                                    Notifications couldn&apos;t be loaded.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        setRetryCount((count) => count + 1)
+                                    }
+                                    className="mt-3 text-sm font-semibold text-blue-600 hover:text-blue-700"
+                                >
+                                    Try again
+                                </button>
+                            </div>
+                        ) : notifications.length === 0 ? (
                             <div className="px-4 py-8 text-center text-sm text-slate-500">
                                 No notifications
                             </div>
