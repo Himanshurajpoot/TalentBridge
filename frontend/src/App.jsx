@@ -5,6 +5,7 @@ import { useAuth } from "./context/useAuth";
 import MainLayout from "./layouts/MainLayout";
 
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import FreelancerDashboard from "./pages/FreelancerDashboard";
 import ClientDashboard from "./pages/ClientDashboard";
 import Projects from "./pages/Projects";
@@ -59,6 +60,11 @@ function App() {
             <Route
                 path="/login"
                 element={<Login />}
+            />
+
+            <Route
+                path="/register"
+                element={<Register />}
             />
 
             <Route

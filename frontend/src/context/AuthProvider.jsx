@@ -49,21 +49,46 @@ export function AuthProvider({ children }) {
             });
     }, []);
 
+    const establishSession = (authenticatedUser, token) => {
+            localStorage.setItem("token", token);
+            setUser(authenticatedUser);
+            setSessionRestoreError("");
+            connectSocket();
+    };
+
     const login = async (email, password) => {
-        const response = await api.post("/auth/login", {
-            email,
-            password,
+            const response = await api.post("/auth/login", {
+                email,
+                password,
         });
 
         const { user: loggedInUser, token } =
             response.data.data;
 
-        localStorage.setItem("token", token);
-        setUser(loggedInUser);
-        setSessionRestoreError("");
-        connectSocket();
+        establishSession(loggedInUser, token);
 
         return loggedInUser;
+    };
+
+    const register = async ({
+        fullName,
+        email,
+        password,
+        role,
+    }) => {
+        const response = await api.post("/auth/register", {
+            fullName,
+            email,
+            password,
+            role,
+        });
+
+        const { user: registeredUser, token } =
+            response.data.data;
+
+        establishSession(registeredUser, token);
+
+        return registeredUser;
     };
 
     const logout = () => {
@@ -80,6 +105,7 @@ export function AuthProvider({ children }) {
                 loading,
                 sessionRestoreError,
                 login,
+                register,
                 logout,
             }}
         >

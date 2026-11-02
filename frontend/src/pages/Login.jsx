@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
 
 function Login() {
@@ -112,6 +112,16 @@ function Login() {
                         {loading ? "Signing in..." : "Sign In"}
                     </button>
                 </form>
+
+                <p className="mt-6 text-center text-sm text-gray-600">
+                    Don&apos;t have an account?{" "}
+                    <Link
+                        to="/register"
+                        className="font-semibold text-blue-600 hover:text-blue-700"
+                    >
+                        Sign up
+                    </Link>
+                </p>
             </div>
         </div>
     );
