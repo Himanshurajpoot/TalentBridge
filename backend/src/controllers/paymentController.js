@@ -851,7 +851,7 @@ const handleRazorpayWebhook = async (req, res) => {
             [PAYMENT_PROVIDER, orderId, paymentId],
         );
 
-        if (paymentResult.rowCount === 0) {
+        if (paymentResult.rowCount !== 1) {
             await client.query("ROLLBACK");
             return res.status(200).json({
                 success: true,
