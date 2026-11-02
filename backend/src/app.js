@@ -19,11 +19,24 @@ const reviewRoutes = require("./routes/reviewRoutes");
 
 const app = express();
 
+const DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+];
+const CORS_ORIGINS = (
+    process.env.CORS_ORIGINS ||
+    DEFAULT_CORS_ORIGINS.join(",")
+)
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const isAllowedOrigin = (origin) =>
+    !origin || CORS_ORIGINS.includes(origin);
+
 const corsOptions = {
-    origin: [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    origin: (origin, callback) =>
+        callback(null, isAllowedOrigin(origin)),
     methods: [
         "GET",
         "HEAD",
@@ -38,6 +51,17 @@ const corsOptions = {
         "Authorization",
     ],
 };
+
+app.use((req, res, next) => {
+    if (!isAllowedOrigin(req.get("Origin"))) {
+        return res.status(403).json({
+            success: false,
+            message: "Origin not allowed",
+        });
+    }
+
+    next();
+});
 
 app.use(cors(corsOptions));
 
